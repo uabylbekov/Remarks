@@ -82,6 +82,11 @@ struct NoteListView: View {
                     }
             }
         }
+        #if os(iOS)
+        // The same rounded, divider-free rows as the folder list in the sidebar. (On the Mac, a middle-column list
+        // already looks like that, and the sidebar style crashes SwiftUI there.)
+        .listStyle(.sidebar)
+        #endif
         .navigationTitle(title)
         .toolbar {
             if scope == .trash {
@@ -170,7 +175,7 @@ private struct NoteRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 if note.isPinned {
-                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange)
+                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
                 }
                 Text(note.title.isEmpty ? "New note" : note.title).font(.headline).lineLimit(1)
             }
@@ -189,4 +194,19 @@ private struct NoteRow: View {
         }
         .accessibilityElement(children: .combine)
     }
+}
+
+#Preview("With a selected note") {
+    let container: ModelContainer
+    do { container = try NotesStore.makeContainer(inMemory: true) } catch { fatalError("\(error)") }
+    let library = Library(context: container.mainContext)
+    let work = try? library.createFolder(named: "Work")
+    let plan = library.createNote(body: "# Launch plan\nShip the editor and the sidebar.", in: work)
+    plan.setPinned(true)
+    library.createNote(body: "# Ideas\nA notes app with code blocks.")
+    library.createNote(body: "# Groceries\nmilk eggs")
+    return NavigationStack {
+        NoteListView(scope: .all, selectedNoteID: .constant(plan.id))
+    }
+    .modelContainer(container)
 }

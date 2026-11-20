@@ -578,7 +578,7 @@ private struct NoteTextView: NSViewRepresentable {
 #endif
 
 #Preview("Editor") {
-    let container = (try? NotesStore.makeContainer(inMemory: true)) ?? { fatalError("in-memory container failed") }()
+    let container = previewContainer()
     let note = Note(body: """
     # Project notes
 
@@ -615,7 +615,7 @@ private struct NoteTextView: NSViewRepresentable {
 /// The same note twice, so the card can be compared with the cursor outside and inside it.
 @MainActor
 private func codeBlockPreview(editing: Bool) -> some View {
-    let container = (try? NotesStore.makeContainer(inMemory: true)) ?? { fatalError("in-memory container failed") }()
+    let container = previewContainer()
     let body = """
     # Project notes
 
@@ -635,4 +635,14 @@ private func codeBlockPreview(editing: Bool) -> some View {
     // Inside the block, so its fences show.
     let caret = (body as NSString).range(of: "func note").location
     return NoteEditor(note: note, initialSelection: editing ? caret : nil).modelContainer(container)
+}
+
+/// An empty in-memory store for the previews above.
+@MainActor
+private func previewContainer() -> ModelContainer {
+    do {
+        return try NotesStore.makeContainer(inMemory: true)
+    } catch {
+        fatalError("in-memory container failed: \(error)")
+    }
 }
