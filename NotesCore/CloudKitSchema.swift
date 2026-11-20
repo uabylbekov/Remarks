@@ -26,7 +26,7 @@ public enum CloudKitSchema {
             // Load synchronously so loading finishes before the schema is initialized.
             description.shouldAddStoreAsynchronously = false
 
-            guard let model = NSManagedObjectModel.makeManagedObjectModel(for: [Note.self, Folder.self, Tag.self]) else {
+            guard let model = NSManagedObjectModel.makeManagedObjectModel(for: [Note.self, Folder.self, Tag.self, Attachment.self]) else {
                 throw SchemaError.noManagedObjectModel
             }
             let container = NSPersistentCloudKitContainer(name: "Notes", managedObjectModel: model)

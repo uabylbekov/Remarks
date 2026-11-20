@@ -8,6 +8,9 @@ struct NoteListView: View {
     @Binding var selectedNoteID: UUID?
 
     @Environment(\.modelContext) private var context
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     @Query(sort: \Note.modifiedAt, order: .reverse) private var allNotes: [Note]
     @Query private var folders: [Folder]
     @Query private var tags: [Tag]
@@ -40,6 +43,21 @@ struct NoteListView: View {
         case .unfiled, .folder, .tag: true
         case .all, .trash: false
         }
+    }
+
+    /// Where the editor sits beside the list, an empty editor column looks different from a full one. Showing the first
+    /// note keeps the toolbar the same. On a phone the editor replaces the list, so nothing is opened on its own.
+    private var opensFirstNote: Bool {
+        #if os(iOS)
+        sizeClass != .compact
+        #else
+        true
+        #endif
+    }
+
+    private func selectFirstNoteIfNeeded() {
+        guard opensFirstNote, !results.contains(where: { $0.id == selectedNoteID }), let first = results.first else { return }
+        selectedNoteID = first.id
     }
 
     var body: some View {
@@ -87,6 +105,8 @@ struct NoteListView: View {
         // already looks like that, and the sidebar style crashes SwiftUI there.)
         .listStyle(.sidebar)
         #endif
+        .onChange(of: results.map(\.id), initial: true) { selectFirstNoteIfNeeded() }
+        .onChange(of: selectedNoteID) { selectFirstNoteIfNeeded() }
         .navigationTitle(title)
         .toolbar {
             if scope == .trash {
@@ -95,10 +115,18 @@ struct NoteListView: View {
                         .disabled(results.isEmpty)
                 }
             } else {
+                #if os(macOS)
+                // At the list column's leading edge, not the window's trailing edge, which is over the editor.
+                ToolbarItem(placement: .navigation) {
+                    Button("New Note", systemImage: "square.and.pencil", action: addNote)
+                        .keyboardShortcut("n")
+                }
+                #else
                 ToolbarItem(placement: .primaryAction) {
                     Button("New Note", systemImage: "square.and.pencil", action: addNote)
                         .keyboardShortcut("n")
                 }
+                #endif
             }
         }
         .overlay { emptyState }
@@ -175,18 +203,21 @@ private struct NoteRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 if note.isPinned {
-                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange)
                 }
                 Text(note.title.isEmpty ? "New note" : note.title).font(.headline).lineLimit(1)
             }
             if !detail.isEmpty {
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             HStack(spacing: 6) {
                 Text(note.modifiedAt.formatted(date: .abbreviated, time: .shortened))
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 if showsFolder, let folder = note.folder {
                     Label(folder.name.isEmpty ? "Untitled" : folder.name, systemImage: "folder")
                         .labelStyle(.titleAndIcon)
+                        .lineLimit(1)
                 }
             }
             .font(.caption)

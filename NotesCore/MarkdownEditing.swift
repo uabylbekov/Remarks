@@ -19,6 +19,7 @@ public struct TextEdit: Equatable, Sendable {
 public enum MarkdownCommand: CaseIterable, Sendable {
     case codeBlock, inlineCode, bold, italic, strikethrough, heading
     case bulletList, numberedList, checklist, quote, link
+    case table, formatTable
 }
 
 /// Pure text logic for the formatting controls, so it can be tested without any UI.
@@ -40,6 +41,8 @@ public enum MarkdownEditing {
         case .checklist: return toggleLines(.checklist, in: source, selection: selection)
         case .quote: return toggleLines(.quote, in: source, selection: selection)
         case .link: return link(in: source, selection: selection)
+        case .table: return table(in: source, selection: selection)
+        case .formatTable: return formatTable(in: source, selection: selection)
         }
     }
 
@@ -218,6 +221,113 @@ public enum MarkdownEditing {
     }
 
     // MARK: Link
+
+    // MARK: Tables (GitHub Markdown)
+
+    /// A table row: starts and ends with a pipe.
+    public static func isTableRow(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= 2 && trimmed.hasPrefix("|") && trimmed.hasSuffix("|")
+    }
+
+    /// The row under a header: only pipes, colons, dashes, and spaces, with at least one dash.
+    public static func isTableSeparator(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isTableRow(trimmed), trimmed.contains("-") else { return false }
+        return trimmed.allSatisfy { "|:- ".contains($0) }
+    }
+
+    private static func cells(of line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+        if trimmed.hasSuffix("|") { trimmed.removeLast() }
+        return trimmed.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// A three-column table with a header and two empty rows, already lined up, with "Column 1" selected.
+    private static func table(in source: NSString, selection: NSRange) -> TextEdit {
+        let header = ["Column 1", "Column 2", "Column 3"]
+        let width = 8
+        func row(_ values: [String]) -> String {
+            "| " + values.map { $0.padding(toLength: width, withPad: " ", startingAt: 0) }.joined(separator: " | ") + " |"
+        }
+        let rule = "| " + header.map { _ in String(repeating: "-", count: width) }.joined(separator: " | ") + " |"
+        let rows = [row(header), rule, row(["", "", ""]), row(["", "", ""])].joined(separator: "\n")
+
+        let line = source.lineRange(for: NSRange(location: min(selection.location, source.length), length: 0))
+        let content = source.substring(with: line)
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // A blank line becomes the table, keeping its own newline.
+            let hadNewline = content.hasSuffix("\n")
+            return TextEdit(
+                range: line,
+                replacement: rows + (hadNewline ? "\n" : ""),
+                selection: NSRange(location: line.location + 2, length: width)
+            )
+        }
+        // A line with text: put the table on the lines after it.
+        let lineEnd = NSMaxRange(line) - (content.hasSuffix("\n") ? 1 : 0)
+        return TextEdit(
+            range: NSRange(location: lineEnd, length: 0),
+            replacement: "\n" + rows,
+            selection: NSRange(location: lineEnd + 1 + 2, length: width)
+        )
+    }
+
+    /// Lines up the columns of the table the caret is in, by padding every cell to the widest one in its column.
+    /// Returns an edit that changes nothing when the caret is not in a table.
+    private static func formatTable(in source: NSString, selection: NSRange) -> TextEdit {
+        let unchanged = TextEdit(range: NSRange(location: selection.location, length: 0), replacement: "", selection: selection)
+        guard source.length > 0 else { return unchanged }
+        var start = source.lineRange(for: NSRange(location: min(selection.location, source.length - 1), length: 0))
+        guard isTableRow(source.substring(with: start)) else { return unchanged }
+
+        // Grow to the whole run of table rows.
+        while start.location > 0 {
+            let previous = source.lineRange(for: NSRange(location: start.location - 1, length: 0))
+            guard isTableRow(source.substring(with: previous)) else { break }
+            start = NSUnionRange(start, previous)
+        }
+        var end = start
+        while NSMaxRange(end) < source.length {
+            let next = source.lineRange(for: NSRange(location: NSMaxRange(end), length: 0))
+            guard isTableRow(source.substring(with: next)) else { break }
+            end = NSUnionRange(end, next)
+        }
+
+        let block = source.substring(with: end)
+        let hadTrailingNewline = block.hasSuffix("\n")
+        let lines = block.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let table = lines.map { cells(of: $0) }
+        let columns = table.map(\.count).max() ?? 0
+        guard columns > 0 else { return unchanged }
+
+        var widths = [Int](repeating: 3, count: columns)
+        for (index, line) in lines.enumerated() where !isTableSeparator(line) {
+            for (column, cell) in table[index].enumerated() { widths[column] = max(widths[column], cell.count) }
+        }
+
+        let formatted = lines.enumerated().map { index, line -> String in
+            let values = table[index]
+            if isTableSeparator(line) {
+                let marks = (0..<columns).map { column -> String in
+                    let cell = column < values.count ? values[column] : "---"
+                    let left = cell.hasPrefix(":"), right = cell.hasSuffix(":")
+                    let dashes = String(repeating: "-", count: max(1, widths[column] - (left ? 1 : 0) - (right ? 1 : 0)))
+                    return (left ? ":" : "") + dashes + (right ? ":" : "")
+                }
+                return "| " + marks.joined(separator: " | ") + " |"
+            }
+            let padded = (0..<columns).map { column -> String in
+                let cell = column < values.count ? values[column] : ""
+                return cell.padding(toLength: widths[column], withPad: " ", startingAt: 0)
+            }
+            return "| " + padded.joined(separator: " | ") + " |"
+        }.joined(separator: "\n") + (hadTrailingNewline ? "\n" : "")
+
+        let location = min(selection.location, end.location + (formatted as NSString).length)
+        return TextEdit(range: end, replacement: formatted, selection: NSRange(location: location, length: 0))
+    }
 
     /// `[selection]()` with the caret between the parentheses, or `[]()` with the caret between the brackets.
     private static func link(in source: NSString, selection: NSRange) -> TextEdit {

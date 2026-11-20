@@ -10,10 +10,7 @@ Run the app from Xcode on each device first. Do the iPhone checks on the iPhone 
 |---|---|---|
 | 1.1 | Create a note on the iPhone | It appears on the Mac within about a minute |
 | 1.2 | Edit it on the Mac | The change reaches the iPhone |
-| 1.3 | Turn on Airplane Mode on the iPhone. The sidebar footer should say **Offline** and **Last synced …** | The footer wording matches; the app still works |
-| 1.4 | Edit the note while offline, then reconnect | The footer goes through **Syncing…** to **Synced** and the Mac gets the edit |
-| 1.5 | Sign out of iCloud in Settings, reopen the app | Footer says **Not syncing**; tapping it explains why; notes still work |
-| 1.6 | Tap the footer | A popover explains the state in plain language |
+| 1.3 | Turn on Airplane Mode on the iPhone and edit a note, then reconnect | The edit reaches the Mac once the iPhone is back online. (The app shows no sync status of its own; iCloud settings do) |
 
 ## 2. Editor conflict fix (Spec 06)
 
@@ -66,10 +63,36 @@ This is the riskiest change. It decides what happens when a note changes while i
 
 | # | Do this | Expect |
 |---|---|---|
-| 6.1 | iPhone: open a folder, then go back | The sync text at the bottom does **not** jump while going back |
+| 6.1 | iPhone: open a folder, then go back | The sidebar does not jump while going back |
 | 6.2 | Create a folder, a tag, and move notes between them | Counts update; Recently Deleted restores |
 | 6.3 | Search "cafe" with a note titled "Café" | It is found; the All Notes / Here switch works |
-| 6.4 | Rotate the iPad (or resize the Mac window) | Columns adapt; the footer stays at the bottom |
+| 6.4 | Rotate the iPad (or resize the Mac window) | Columns adapt |
+
+## 7. Attachments (Spec 07)
+
+| # | Do this | Expect |
+|---|---|---|
+| 7.1 | iPhone: tap the paperclip on the keyboard bar, choose **Photo Library**, pick a photo | The photo appears inline in the note, on its own line |
+| 7.2 | Paperclip, **Take Photo** (iPhone) | The camera asks for permission once, then the photo is added |
+| 7.3 | Paperclip, **Choose File**, pick a PDF | A chip with the file name and size appears; tapping it opens Quick Look |
+| 7.4 | Mac: paperclip in the toolbar, **Photo Library…** and **Choose File…** | The same results; clicking a chip opens the file in its app |
+| 7.5 | Mac: drag a file from Finder into the note | It is added at the caret |
+| 7.6 | Move the caret up and down through the picture and chip lines | Nothing around them shifts; the raw `![…](attachment://…)` text shows only while the caret is on the line |
+| 7.7 | Add a very large file (over 25 MB) | A message says it is too large and nothing is added |
+| 7.8 | Add a note with a photo on the Mac, open it on the iPhone | The text arrives first, then the picture fills in |
+| 7.9 | Delete the picture's line, then undo | The picture comes back |
+| 7.10 | Look at the note in the list | The row shows the attachment's name, not a link |
+
+## 8. Tables and the formatting toolbar
+
+| # | Do this | Expect |
+|---|---|---|
+| 8.1 | Mac: look at the editor toolbar | Heading, Bold, Italic, Checklist, **Table**, **Attach** (paperclip), the two lists, and a **More** menu. Narrow the window: the last buttons fold into the » menu first |
+| 8.2 | iPhone: look at the keyboard bar | Heading, Checklist, **Table**, **paperclip** come first, then the other buttons |
+| 8.3 | Tap **Table** | A 3 by 3 table is inserted with "Column 1" selected, drawn as a card with a bold header |
+| 8.4 | Type in the cells, then use **Format** > **Format Table** (Mac) or the **More** menu | The columns line up again |
+| 8.5 | Add a photo or file, and the caret ends on the line after it | The attachment shows as a picture or chip, not as raw text |
+| 8.6 | A wide table on an iPhone | The row is cut at the edge (it does not scroll sideways yet) |
 
 ## When something fails
 

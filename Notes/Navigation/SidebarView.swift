@@ -10,15 +10,16 @@ private struct NamePrompt {
     let commit: (String) -> Void
 }
 
-/// Where notes live: All Notes, Unfiled, the folder tree, tags, and Recently Deleted (Spec 04).
+/// Where notes live: All Notes, the folder tree, tags, and Recently Deleted (Spec 04).
 struct SidebarView: View {
     @Binding var selection: NoteScope?
+    /// False while the column is hidden. The system keeps showing this column's toolbar buttons then, so they check it.
+    var isSidebarVisible = true
 
     @Environment(\.modelContext) private var context
     @Query(filter: #Predicate<Folder> { $0.parent == nil && $0.deletedAt == nil }, sort: \Folder.sortIndex)
     private var rootFolders: [Folder]
     @Query(sort: \Tag.name) private var tags: [Tag]
-    @Environment(\.deviceBottomInset) private var deviceBottomInset
     @State private var prompt: NamePrompt?
     @State private var promptText = ""
     #if os(iOS)
@@ -31,7 +32,6 @@ struct SidebarView: View {
         List(selection: $selection) {
             Section {
                 Label("All Notes", systemImage: "note.text").tag(NoteScope.all)
-                Label("Unfiled", systemImage: "tray").tag(NoteScope.unfiled)
             }
 
             Section("Folders") {
@@ -53,14 +53,6 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Notes")
-        // Pinned to the window's bottom edge, not the column's. The column's bottom edge moves while the note list's
-        // search field slides away, which made the text jump when going back.
-        .overlay(alignment: .bottom) {
-            SyncStatusFooter()
-                .padding(.bottom, deviceBottomInset)
-                .ignoresSafeArea(.container, edges: .bottom)
-        }
-        .contentMargins(.bottom, 56 + deviceBottomInset, for: .scrollContent)
         #if os(iOS)
         .sheet(isPresented: $showsAppearance) {
             NavigationStack {
@@ -74,11 +66,16 @@ struct SidebarView: View {
         }
         #endif
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("New Folder", systemImage: "folder.badge.plus") { askNewFolder(in: nil) }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+            if isSidebarVisible {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New Folder", systemImage: "folder.badge.plus") { askNewFolder(in: nil) }
+                }
             }
             #if os(iOS)
+            // On the iPhone this is the first screen, so a note can be started without opening a list first.
+            ToolbarItem(placement: .primaryAction) {
+                Button("New Note", systemImage: "square.and.pencil", action: addNote)
+            }
             ToolbarItem(placement: .topBarLeading) {
                 Button("Appearance", systemImage: "textformat") { showsAppearance = true }
             }
@@ -96,6 +93,18 @@ struct SidebarView: View {
             Button("Cancel", role: .cancel) { prompt = nil }
         }
     }
+
+    #if os(iOS)
+    /// A new note in the folder that is selected, shown through the same route as Open Note.
+    private func addNote() {
+        var folder: Folder?
+        if case .folder(let id) = selection {
+            folder = try? context.fetch(FetchDescriptor<Folder>(predicate: #Predicate { $0.id == id })).first
+        }
+        let note = library.createNote(in: folder)
+        NavigationRouter.shared.open(note.id)
+    }
+    #endif
 
     // MARK: Rows
 
@@ -166,4 +175,15 @@ struct SidebarView: View {
             }
         }
     }
+}
+
+#Preview("Sidebar") {
+    let container: ModelContainer
+    do { container = try NotesStore.makeContainer(inMemory: true) } catch { fatalError("\(error)") }
+    let library = Library(context: container.mainContext)
+    _ = try? library.createFolder(named: "Work")
+    return NavigationStack {
+        SidebarView(selection: .constant(.all))
+    }
+    .modelContainer(container)
 }

@@ -13,7 +13,7 @@ public enum SchemaV1: VersionedSchema {
     public static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
 
     public static var models: [any PersistentModel.Type] {
-        [Note.self, Folder.self, Tag.self]
+        [Note.self, Folder.self, Tag.self, Attachment.self]
     }
 
     @Model
@@ -35,6 +35,9 @@ public enum SchemaV1: VersionedSchema {
         public var minimumReaderVersion: Int = 1
         public private(set) var folder: Folder?
         public var tags: [Tag]?
+        /// Files and images the Markdown refers to as `attachment://<id>` (Spec 07).
+        @Relationship(deleteRule: .cascade, inverse: \Attachment.note)
+        public var attachments: [Attachment]?
 
         public init(body: String = "", now: Date = .now) {
             self.createdAt = now
@@ -106,11 +109,48 @@ public enum SchemaV1: VersionedSchema {
             self.createdAt = now
         }
     }
+
+    /// A file or image attached to a note (Spec 07). The Markdown in `Note.body` refers to it as `attachment://<id>`.
+    @Model
+    public final class Attachment {
+        /// Referenced from the Markdown. Never changes. Not unique-constrained.
+        public var id: UUID = UUID()
+        /// The original name, shown on the file chip.
+        public var fileName: String = ""
+        /// A UTI such as `public.jpeg`. Decides image or file, the icon, and the preview.
+        public var typeIdentifier: String = ""
+        public var byteCount: Int = 0
+        public var createdAt: Date = Date.now
+        /// A description of an image, for VoiceOver.
+        public var altText: String = ""
+        /// Images only, so the editor can reserve the right height before the picture is loaded.
+        public var pixelWidth: Int = 0
+        public var pixelHeight: Int = 0
+        /// Stored outside the database and mirrored by CloudKit as an asset.
+        @Attribute(.externalStorage) public var data: Data?
+        public var note: Note?
+
+        public init(
+            id: UUID = UUID(),
+            fileName: String = "",
+            typeIdentifier: String = "",
+            data: Data? = nil,
+            now: Date = .now
+        ) {
+            self.id = id
+            self.fileName = fileName
+            self.typeIdentifier = typeIdentifier
+            self.data = data
+            self.byteCount = data?.count ?? 0
+            self.createdAt = now
+        }
+    }
 }
 
 public typealias Note = SchemaV1.Note
 public typealias Folder = SchemaV1.Folder
 public typealias Tag = SchemaV1.Tag
+public typealias Attachment = SchemaV1.Attachment
 
 public enum NotesMigrationPlan: SchemaMigrationPlan {
     public static var schemas: [any VersionedSchema.Type] { [SchemaV1.self] }

@@ -7,28 +7,43 @@ import NotesCore
 struct ContentView: View {
     @State private var scope: NoteScope? = .all
     @State private var selectedNoteID: UUID?
+    @Environment(\.modelContext) private var context
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var asksNewFolder = false
+    @State private var newFolderName = ""
     private let router = NavigationRouter.shared
 
     var body: some View {
-        // Measured outside the navigation container, so it is the window's own inset (see `deviceBottomInset`).
-        GeometryReader { proxy in
-            splitView.environment(\.deviceBottomInset, proxy.safeAreaInsets.bottom)
-        }
-        // Only the container area. The keyboard must still push the editor up.
-        .ignoresSafeArea(.container)
+        splitView
     }
 
     private var splitView: some View {
-        NavigationSplitView {
-            SidebarView(selection: $scope)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            SidebarView(selection: $scope, isSidebarVisible: columnVisibility != .doubleColumn && columnVisibility != .detailOnly)
         } content: {
             NoteListView(scope: scope ?? .all, selectedNoteID: $selectedNoteID)
         } detail: {
-            if let selectedNoteID {
-                NoteDetailView(id: selectedNoteID)
-            } else {
-                ContentUnavailableView("Select a Note", systemImage: "note.text")
+            Group {
+                if let selectedNoteID {
+                    NoteDetailView(id: selectedNoteID)
+                } else {
+                    ContentUnavailableView("Select a Note", systemImage: "note.text")
+                }
             }
+            // Without a minimum, the other columns take their widest size and squeeze the editor.
+            .navigationSplitViewColumnWidth(min: 380, ideal: 560)
+        }
+        // The File menu's New Folder works even while the sidebar, and its toolbar button, is hidden.
+        .focusedSceneValue(\.newFolder, $asksNewFolder)
+        .onChange(of: asksNewFolder) { if asksNewFolder { newFolderName = "" } }
+        .alert("New Folder", isPresented: $asksNewFolder) {
+            TextField("Name", text: $newFolderName)
+            Button("Create") {
+                if let folder = try? Library(context: context).createFolder(named: newFolderName) {
+                    scope = .folder(folder.id)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .onChange(of: scope) { selectedNoteID = nil }
         // "Open Note" from Siri or Shortcuts. `initial: true` also catches a request made before this view existed.
@@ -55,4 +70,9 @@ struct ContentView: View {
     library.createNote(body: "# Groceries\n- [ ] milk\n- [x] eggs")
     library.createNote(body: "# Ideas\nA notes app with code blocks.")
     return ContentView().modelContainer(container).environment(SyncMonitor())
+}
+
+extension FocusedValues {
+    /// Set to true to ask for a new top-level folder. Provided by the main window, used by the File menu.
+    @Entry var newFolder: Binding<Bool>?
 }

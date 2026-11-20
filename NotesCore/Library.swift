@@ -268,9 +268,10 @@ public struct Library {
         public var mergedNotes = 0
         public var purgedNotes = 0
         public var purgedFolders = 0
+        public var purgedAttachments = 0
 
         public var changedAnything: Bool {
-            mergedTags + mergedNotes + purgedNotes + purgedFolders > 0
+            mergedTags + mergedNotes + purgedNotes + purgedFolders + purgedAttachments > 0
         }
     }
 
@@ -290,6 +291,7 @@ public struct Library {
         let purged = try purgeExpired(now: now)
         report.purgedNotes = purged.notes
         report.purgedFolders = purged.folders
+        report.purgedAttachments = try AttachmentStore(context: context).purgeUnreferenced(now: now)
         return report
     }
 

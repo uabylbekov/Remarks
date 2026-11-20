@@ -56,6 +56,12 @@ import NotesCore
             }
         }
         #if os(macOS)
+        .commands {
+            FileCommands()
+            FormatCommands()
+        }
+        #endif
+        #if os(macOS)
         Settings {
             AppearanceSettingsView()
         }
@@ -87,3 +93,42 @@ private struct LibraryMaintenance: ViewModifier {
         if report?.changedAnything == true { try? context.save() }
     }
 }
+
+#if os(macOS)
+/// New Folder in the File menu, with the shortcut the toolbar button used to own.
+private struct FileCommands: Commands {
+    @FocusedValue(\.newFolder) private var newFolder
+
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("New Folder") { newFolder?.wrappedValue = true }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(newFolder == nil)
+        }
+    }
+}
+
+/// The Format menu. The items act on the editor that has focus, and are dimmed when there is none.
+private struct FormatCommands: Commands {
+    @FocusedValue(\.editorCommands) private var editor
+
+    var body: some Commands {
+        CommandMenu("Format") {
+            Button("Bold") { editor?.perform(.bold) }.keyboardShortcut("b")
+            Button("Italic") { editor?.perform(.italic) }.keyboardShortcut("i")
+            Button("Strikethrough") { editor?.perform(.strikethrough) }
+            Button("Inline Code") { editor?.perform(.inlineCode) }.keyboardShortcut("e")
+            Button("Link") { editor?.perform(.link) }.keyboardShortcut("k")
+            Divider()
+            Button("Heading") { editor?.perform(.heading) }
+            Button("Bulleted List") { editor?.perform(.bulletList) }
+            Button("Numbered List") { editor?.perform(.numberedList) }
+            Button("Checklist") { editor?.perform(.checklist) }
+            Button("Table") { editor?.perform(.table) }
+            Button("Format Table") { editor?.perform(.formatTable) }
+            Button("Quote") { editor?.perform(.quote) }
+            Button("Code Block") { editor?.perform(.codeBlock) }.keyboardShortcut("c", modifiers: [.command, .option])
+        }
+    }
+}
+#endif

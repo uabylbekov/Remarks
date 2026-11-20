@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 import SwiftData
 import NotesCore
 
@@ -8,6 +9,25 @@ import UIKit
 import AppKit
 #endif
 
+/// Lets a toolbar outside the editor run formatting commands in it. The Mac editor connects itself when it appears.
+@MainActor
+final class EditorCommands {
+    var handler: ((MarkdownCommand) -> Void)?
+    /// Puts Markdown on its own line at the caret. Used to insert an attachment.
+    var insert: ((String) -> Void)?
+    /// Asks the screen around the editor to pick an attachment from this source. Set by that screen.
+    var requestAttachment: ((AttachmentSource) -> Void)?
+
+    func perform(_ command: MarkdownCommand) { handler?(command) }
+    func insertBlock(_ markdown: String) { insert?(markdown) }
+    func attach(from source: AttachmentSource) { requestAttachment?(source) }
+}
+
+extension FocusedValues {
+    /// The formatting commands of the editor that has focus, for the menu bar.
+    @Entry var editorCommands: EditorCommands?
+}
+
 /// The note editor: a TextKit 2 text view with live Markdown preview (Spec 03).
 /// The stored text is always the real Markdown. Edits are saved through `Note.setBody` after a short pause,
 /// and immediately when editing ends or the editor goes away.
@@ -15,6 +35,8 @@ struct NoteEditor: View {
     let note: Note
     /// Where to put the caret when the note first appears. Used by previews, to show a note while editing.
     var initialSelection: Int?
+    /// Set by a toolbar that wants to format the text. Used on the Mac.
+    var commands: EditorCommands?
     @Environment(\.history) private var history
 
     @State private var notice: String?
@@ -26,7 +48,8 @@ struct NoteEditor: View {
             history: history,
             appearanceRevision: AppearanceModel.shared.revision,
             onKeptEdits: { showNotice() },
-            initialSelection: initialSelection
+            initialSelection: initialSelection,
+            commands: commands
         )
         .overlay(alignment: .top) {
             if let notice {
@@ -107,8 +130,9 @@ private struct NoteTextView: UIViewRepresentable {
     let appearanceRevision: Int
     let onKeptEdits: () -> Void
     var initialSelection: Int?
+    var commands: EditorCommands?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history, commands: commands) }
 
     func makeUIView(context: Context) -> UITextView {
         // `usingTextLayoutManager: true` selects TextKit 2.
@@ -133,6 +157,9 @@ private struct NoteTextView: UIViewRepresentable {
         context.coordinator.update(note: note)
         context.coordinator.onKeptEdits = onKeptEdits
         context.coordinator.applyAppearance(revision: appearanceRevision)
+        context.coordinator.refreshAttachmentsIfChanged()
+        commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
+        commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
 
     static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
@@ -144,14 +171,17 @@ private struct NoteTextView: UIViewRepresentable {
         private var note: Note
         private weak var textView: MarkdownUITextView?
         private var preview: LivePreviewController?
-        private var highlighter: SyntaxHighlighter?
         private var saveTask: Task<Void, Never>?
 
         private let history: HistoryRecorder?
+        private let commands: EditorCommands?
+        private lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
+        private var attachmentSignature = 0
 
-        init(note: Note, history: HistoryRecorder?) {
+        init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
             self.history = history
             self.note = note
+            self.commands = commands
         }
 
         func attach(to textView: MarkdownUITextView) {
@@ -159,13 +189,14 @@ private struct NoteTextView: UIViewRepresentable {
             textView.onCommand = { [weak self] in self?.perform($0) }
             textView.inputAccessoryView = MarkdownAccessoryView(
                 onCommand: { [weak self] in self?.perform($0) },
+                onAttach: { [weak self] in self?.commands?.attach(from: $0) },
                 onDismiss: { [weak textView] in textView?.resignFirstResponder() }
             )
             if let layoutManager = textView.textLayoutManager,
                let contentStorage = layoutManager.textContentManager as? NSTextContentStorage {
                 preview = LivePreviewController(contentStorage: contentStorage, layoutManager: layoutManager)
+                preview?.attachmentProvider = { [weak self] in self?.catalog.display(for: $0) }
             }
-            highlighter = SyntaxHighlighter(storage: textView.textStorage)
 
             // A tap on a checkbox toggles it. The recognizer only begins when the tap lands on a box,
             // and the text view's own tap recognizers wait for it, so the caret does not jump to that line.
@@ -187,15 +218,42 @@ private struct NoteTextView: UIViewRepresentable {
             return preview.checklistLine(at: CGPoint(x: location.x - inset.left, y: location.y - inset.top))
         }
 
+        private func attachmentID(for gesture: UIGestureRecognizer) -> UUID? {
+            guard let textView, let preview else { return nil }
+            let location = gesture.location(in: textView)
+            let inset = textView.textContainerInset
+            return preview.attachmentID(at: CGPoint(x: location.x - inset.left, y: location.y - inset.top))
+        }
+
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            checklistLine(for: gestureRecognizer) != nil
+            checklistLine(for: gestureRecognizer) != nil || attachmentID(for: gestureRecognizer) != nil
         }
 
         @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-            guard let textView, let line = checklistLine(for: gesture),
+            guard let textView else { return }
+            if let id = attachmentID(for: gesture), let attachment = catalog.attachment(with: id) {
+                AttachmentOpener.open(attachment, from: textView)
+                return
+            }
+            guard let line = checklistLine(for: gesture),
                   let edit = MarkdownEditing.toggleChecklist(in: textView.text, atLine: line, keepingSelection: textView.selectedRange)
             else { return }
             apply(edit)
+        }
+
+        // MARK: Attachments
+
+        func insertBlock(_ markdown: String) {
+            guard let textView else { return }
+            apply(MarkdownEditing.insertBlock(markdown, in: textView.text, selection: textView.selectedRange))
+        }
+
+        /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.
+        func refreshAttachmentsIfChanged() {
+            let signature = catalog.signature
+            guard signature != attachmentSignature else { return }
+            attachmentSignature = signature
+            preview?.refreshAttachments()
         }
 
         private var appearanceRevision = AppearanceModel.shared.revision
@@ -209,7 +267,6 @@ private struct NoteTextView: UIViewRepresentable {
             appearanceRevision = revision
             textView.font = EditorTheme.proseFont
             preview?.reload()
-            highlighter?.apply()
         }
 
         /// SwiftUI re-evaluates this when the note or its body changes (including changes that arrive by sync).
@@ -246,7 +303,6 @@ private struct NoteTextView: UIViewRepresentable {
             textView.text = note.body
             baseBody = note.body
             preview?.reload()
-            highlighter?.apply()
             if note.body.isEmpty {
                 // A new note is ready to type into.
                 DispatchQueue.main.async { textView.becomeFirstResponder() }
@@ -284,7 +340,7 @@ private struct NoteTextView: UIViewRepresentable {
 
         // MARK: Formatting
 
-        private func perform(_ command: MarkdownCommand) {
+        func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
             apply(MarkdownEditing.edit(command, in: textView.text, selection: textView.selectedRange))
         }
@@ -313,8 +369,6 @@ private struct NoteTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            preview?.textChanged()
-            highlighter?.schedule()
             scheduleSave()
         }
 
@@ -332,18 +386,39 @@ private struct NoteTextView: UIViewRepresentable {
 
 // MARK: - macOS
 
+/// A text view that passes clicks on a checklist box to the editor before it moves the caret.
+final class MarkdownNSTextView: NSTextView {
+    var onCheckboxClick: ((CGPoint) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        if onCheckboxClick?(convert(event.locationInWindow, from: nil)) == true { return }
+        super.mouseDown(with: event)
+    }
+}
+
 private struct NoteTextView: NSViewRepresentable {
     let note: Note
     let history: HistoryRecorder?
     let appearanceRevision: Int
     let onKeptEdits: () -> Void
     var initialSelection: Int?
+    var commands: EditorCommands?
 
     func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
+        // The same setup `NSTextView.scrollableTextView()` does, but with our own subclass.
+        let textView = MarkdownNSTextView(usingTextLayoutManager: true)
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.documentView = textView
         textView.font = EditorTheme.proseFont
         textView.isRichText = false
         textView.allowsUndo = true
@@ -364,11 +439,13 @@ private struct NoteTextView: NSViewRepresentable {
         context.coordinator.update(note: note)
         context.coordinator.onKeptEdits = onKeptEdits
         context.coordinator.applyAppearance(revision: appearanceRevision)
+        context.coordinator.refreshAttachmentsIfChanged()
+        commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
+        commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.flushSave()
-        coordinator.removeShortcuts()
     }
 
     @MainActor
@@ -376,10 +453,9 @@ private struct NoteTextView: NSViewRepresentable {
         private var note: Note
         private weak var textView: NSTextView?
         private var preview: LivePreviewController?
-        private var highlighter: SyntaxHighlighter?
+        private lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
+        private var attachmentSignature = 0
         private var saveTask: Task<Void, Never>?
-        private var keyMonitor: Any?
-        private var mouseMonitor: Any?
 
         private let history: HistoryRecorder?
 
@@ -393,12 +469,9 @@ private struct NoteTextView: NSViewRepresentable {
             if let layoutManager = textView.textLayoutManager,
                let contentStorage = layoutManager.textContentManager as? NSTextContentStorage {
                 preview = LivePreviewController(contentStorage: contentStorage, layoutManager: layoutManager)
+                preview?.attachmentProvider = { [weak self] in self?.catalog.display(for: $0) }
             }
-            if let storage = textView.textStorage {
-                highlighter = SyntaxHighlighter(storage: storage)
-            }
-            installShortcuts()
-            installCheckboxClicks()
+            (textView as? MarkdownNSTextView)?.onCheckboxClick = { [weak self] point in self?.handleClick(at: point) ?? false }
             load()
         }
 
@@ -413,7 +486,6 @@ private struct NoteTextView: NSViewRepresentable {
             appearanceRevision = revision
             textView.font = EditorTheme.proseFont
             preview?.reload()
-            highlighter?.apply()
         }
 
         func update(note newNote: Note) {
@@ -449,7 +521,6 @@ private struct NoteTextView: NSViewRepresentable {
             textView.string = note.body
             baseBody = note.body
             preview?.reload()
-            highlighter?.apply()
             if note.body.isEmpty {
                 DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
             }
@@ -484,54 +555,43 @@ private struct NoteTextView: NSViewRepresentable {
             }
         }
 
-        // MARK: Formatting shortcuts
+        // MARK: Formatting
 
-        /// ⌘B bold, ⌘I italic, ⌘E inline code, ⌘K link, ⌥⌘C code block. Only while this editor has focus.
-        private func installShortcuts() {
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let textView = self.textView, textView.window?.firstResponder === textView else { return event }
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                let command: MarkdownCommand?
-                switch (event.charactersIgnoringModifiers, flags) {
-                case ("b", .command): command = .bold
-                case ("i", .command): command = .italic
-                case ("e", .command): command = .inlineCode
-                case ("k", .command): command = .link
-                case ("c", [.command, .option]): command = .codeBlock
-                default: command = nil
-                }
-                guard let command else { return event }
-                self.perform(command)
-                return nil
+        /// A click on a checkbox toggles it, and a click on an attachment opens it. Returns true when the click was
+        /// one of those, so the caret does not move to that line.
+        private func handleClick(at location: CGPoint) -> Bool {
+            guard let textView else { return false }
+            let origin = textView.textContainerOrigin
+            let point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+            if let id = preview?.attachmentID(at: point), let attachment = catalog.attachment(with: id) {
+                AttachmentOpener.open(attachment, from: textView)
+                return true
             }
+            guard let line = preview?.checklistLine(at: point),
+                  let edit = MarkdownEditing.toggleChecklist(in: textView.string, atLine: line, keepingSelection: textView.selectedRange())
+            else { return false }
+            apply(edit)
+            return true
         }
 
-        func removeShortcuts() {
-            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-            if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
-            keyMonitor = nil
-            mouseMonitor = nil
-        }
-
-        /// A click on a checkbox toggles it, and the click is consumed so the caret does not move to that line.
-        private func installCheckboxClicks() {
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-                guard let self, let textView = self.textView, event.window === textView.window else { return event }
-                let location = textView.convert(event.locationInWindow, from: nil)
-                guard textView.bounds.contains(location) else { return event }
-                let origin = textView.textContainerOrigin
-                let point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
-                guard let line = self.preview?.checklistLine(at: point),
-                      let edit = MarkdownEditing.toggleChecklist(in: textView.string, atLine: line, keepingSelection: textView.selectedRange())
-                else { return event }
-                self.apply(edit)
-                return nil
-            }
-        }
-
-        private func perform(_ command: MarkdownCommand) {
+        func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
             apply(MarkdownEditing.edit(command, in: textView.string, selection: textView.selectedRange()))
+        }
+
+        // MARK: Attachments
+
+        func insertBlock(_ markdown: String) {
+            guard let textView else { return }
+            apply(MarkdownEditing.insertBlock(markdown, in: textView.string, selection: textView.selectedRange()))
+        }
+
+        /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.
+        func refreshAttachmentsIfChanged() {
+            let signature = catalog.signature
+            guard signature != attachmentSignature else { return }
+            attachmentSignature = signature
+            preview?.refreshAttachments()
         }
 
         private func apply(_ edit: TextEdit) {
@@ -559,8 +619,6 @@ private struct NoteTextView: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            preview?.textChanged()
-            highlighter?.schedule()
             scheduleSave()
         }
 
@@ -645,4 +703,117 @@ private func previewContainer() -> ModelContainer {
     } catch {
         fatalError("in-memory container failed: \(error)")
     }
+}
+
+/// A code block with blank lines at its start, middle (two in a row), and end, to check spacing in both states.
+@MainActor
+private func blankLinesPreview(editing: Bool) -> some View {
+    let container = previewContainer()
+    let body = "Before\n\n```swift\n\nlet a = 1\n\n\nlet b = 2\n\n```\n\nAfter"
+    let note = Note(body: body)
+    container.mainContext.insert(note)
+    let caret = (body as NSString).range(of: "let a").location
+    return NoteEditor(note: note, initialSelection: editing ? caret : nil).modelContainer(container)
+}
+
+#Preview("Blank lines, reading") { blankLinesPreview(editing: false) }
+#Preview("Blank lines, editing") { blankLinesPreview(editing: true) }
+
+/// Typing a block: the fence is open and the caret sits on a new empty last line.
+@MainActor
+private func typingBlockPreview(body: String) -> some View {
+    let container = previewContainer()
+    let note = Note(body: body)
+    container.mainContext.insert(note)
+    return NoteEditor(note: note, initialSelection: (body as NSString).length).modelContainer(container)
+}
+
+#Preview("Typing: open fence + Return") { typingBlockPreview(body: "Before\n\n```swift\n") }
+#Preview("Typing: code line + Return") { typingBlockPreview(body: "Before\n\n```swift\nlet a = 1\n") }
+#Preview("Typing: second line has a character") { typingBlockPreview(body: "Before\n\n```swift\nlet a = 1\nx") }
+
+/// A block written right against its neighboring text, with no blank lines, to check the spacing around the card.
+@MainActor
+private func tightBlockPreview(editing: Bool) -> some View {
+    let container = previewContainer()
+    let body = "First line of text\n```swift\nlet a = 1\n```\nLast line of text"
+    let note = Note(body: body)
+    container.mainContext.insert(note)
+    let caret = (body as NSString).range(of: "let a").location
+    return NoteEditor(note: note, initialSelection: editing ? caret : nil).modelContainer(container)
+}
+
+#Preview("Tight block, reading") { tightBlockPreview(editing: false) }
+#Preview("Tight block, editing") { tightBlockPreview(editing: true) }
+
+// Typing comparisons: each pair differs by one typed character, with the caret at the end.
+#Preview("Shift A1: below a block, empty line") { typingBlockPreview(body: "First\n```swift\nlet a = 1\n```\n") }
+#Preview("Shift A2: below a block, typed x") { typingBlockPreview(body: "First\n```swift\nlet a = 1\n```\nx") }
+#Preview("Shift B1: unclosed, last line") { typingBlockPreview(body: "First\n```swift\nlet a = 1") }
+#Preview("Shift B2: unclosed, after Return") { typingBlockPreview(body: "First\n```swift\nlet a = 1\n") }
+
+#Preview("Attachments") {
+    let container = previewContainer()
+    let context = container.mainContext
+    let note = Library(context: context).createNote()
+
+    // A generated picture and a file, added the same way the app adds them.
+    let store = AttachmentStore(context: context)
+    let pictureData = previewPicture(width: 800, height: 500)
+    let picture = try? store.add(data: pictureData, fileName: "Beach.png", typeIdentifier: "public.png", to: note)
+    let file = try? store.add(data: Data(count: 2_400_000), fileName: "Quarterly plan.pdf", typeIdentifier: "com.adobe.pdf", to: note)
+
+    note.setBody("""
+    # Trip notes
+
+    Photos from the first day:
+    \(picture.map { AttachmentStore.markdown(for: $0) } ?? "")
+    The plan is attached:
+    \(file.map { AttachmentStore.markdown(for: $0) } ?? "")
+    [Gone.pdf](attachment://\(UUID().uuidString))
+
+    Back to normal text.
+    """)
+    return NoteEditor(note: note).modelContainer(container)
+}
+
+/// A teal-to-indigo gradient as PNG data, for the preview above.
+private func previewPicture(width: Int, height: Int) -> Data {
+    guard let context = CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return Data() }
+    let colors = [CGColor(red: 0.2, green: 0.7, blue: 0.7, alpha: 1), CGColor(red: 0.3, green: 0.2, blue: 0.8, alpha: 1)] as CFArray
+    if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+        context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+    }
+    let output = NSMutableData()
+    guard let image = context.makeImage(),
+          let destination = CGImageDestinationCreateWithData(output as CFMutableData, "public.png" as CFString, 1, nil)
+    else { return Data() }
+    CGImageDestinationAddImage(destination, image, nil)
+    CGImageDestinationFinalize(destination)
+    return output as Data
+}
+
+#Preview("Table, and a caret below an attachment") {
+    let container = previewContainer()
+    let context = container.mainContext
+    let note = Library(context: context).createNote()
+    let file = try? AttachmentStore(context: context).add(data: Data(count: 5_000), fileName: "CV.pdf", typeIdentifier: "com.adobe.pdf", to: note)
+
+    let body = """
+    # Groceries
+
+    | Item   | Qty | Note      |
+    | ------ | --- | --------- |
+    | Apples | 3   | **fresh** |
+    | Milk   | 1   |           |
+
+    \(file.map { AttachmentStore.markdown(for: $0) } ?? "")
+
+    """
+    note.setBody(body)
+    // The caret is on the empty line after the attachment, so the attachment line must show as a chip.
+    return NoteEditor(note: note, initialSelection: (body as NSString).length).modelContainer(container)
 }

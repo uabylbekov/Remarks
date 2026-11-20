@@ -111,11 +111,15 @@ enum EditorTheme {
         #endif
     }
 
-    /// The app's accent color: Claude orange, from the `AccentColor` asset (a darker shade in light mode so text and
-    /// links stay readable on white, the brand orange in dark mode).
-    static var accentColor: EditorColor { EditorColor(named: "AccentColor") ?? .systemOrange }
+    static var linkColor: EditorColor {
+        #if canImport(UIKit)
+        .link
+        #else
+        .linkColor
+        #endif
+    }
 
-    static var linkColor: EditorColor { accentColor }
+    static var accentColor: EditorColor { .systemBlue }
 
     /// The code theme's background, for code blocks and inline code.
     static var codeBackground: EditorColor { color(settings.codeTheme.background) }

@@ -64,13 +64,6 @@ extension SyncSummary {
     }
 }
 
-extension EnvironmentValues {
-    /// The bottom safe area of the whole window (the home indicator), measured outside the navigation container.
-    /// Unlike the safe area inside a column, it does not change when a toolbar, such as the note list's search
-    /// field, appears or goes away, so a footer placed with it stays still while navigating.
-    @Entry var deviceBottomInset: CGFloat = 0
-}
-
 /// The sync status as quiet, centered grey text at the bottom of the sidebar, with no icon and no container:
 /// the state ("Synced", "Syncing…", "Offline") and, under it, when it last synced. Tap for the full explanation.
 struct SyncStatusFooter: View {

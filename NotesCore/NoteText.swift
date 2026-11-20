@@ -24,7 +24,8 @@ public enum NoteText {
                 insideFence.toggle()
                 continue
             }
-            let text = insideFence ? line : strippingMarks(from: line)
+            // An attachment line reads as its name, not as a link with an id in it.
+            let text = insideFence ? line : (AttachmentLine.parse(line)?.label ?? strippingMarks(from: line))
             guard !text.isEmpty else { continue }
 
             if title == nil {

@@ -99,9 +99,9 @@ struct NoteModelTests {
 // MARK: - Schema and store
 
 struct StoreTests {
-    @Test func entityNamesMatchTheCloudKitSchemaWeSpiked() {
+    @Test func entityNamesAreTheOnesWeSyncToCloudKit() {
         let names = NotesStore.schema.entities.map(\.name).sorted()
-        #expect(names == ["Folder", "Note", "Tag"])
+        #expect(names == ["Attachment", "Folder", "Note", "Tag"])
     }
 
     @Test func inMemoryContainerRoundTripsANote() throws {

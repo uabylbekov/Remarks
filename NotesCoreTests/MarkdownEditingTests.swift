@@ -174,9 +174,52 @@ struct MarkdownEditingTests {
     }
 
     @Test func everyCommandWorksOnAnEmptyNote() {
-        for command in MarkdownCommand.allCases {
+        // Formatting a table has nothing to do when there is no table.
+        for command in MarkdownCommand.allCases where command != .formatTable {
             let edit = MarkdownEditing.edit(command, in: "", selection: NSRange(location: 0, length: 0))
             #expect(!edit.replacement.isEmpty)
         }
+    }
+}
+
+struct TableEditingTests {
+    @Test func insertsAnAlignedTableOnABlankLine() {
+        let edit = MarkdownEditing.edit(.table, in: "", selection: NSRange(location: 0, length: 0))
+        let lines = edit.replacement.split(separator: "\n").map(String.init)
+        #expect(lines.count == 4)
+        #expect(Set(lines.map(\.count)).count == 1)
+        #expect(MarkdownEditing.isTableSeparator(lines[1]))
+        #expect((edit.replacement as NSString).substring(with: edit.selection) == "Column 1")
+    }
+
+    @Test func putsTheTableAfterALineWithText() {
+        let edit = MarkdownEditing.edit(.table, in: "Intro", selection: NSRange(location: 5, length: 0))
+        #expect(edit.range == NSRange(location: 5, length: 0))
+        #expect(edit.replacement.hasPrefix("\n| Column 1"))
+    }
+
+    @Test func recognisesRowsAndSeparators() {
+        #expect(MarkdownEditing.isTableRow("| a | b |"))
+        #expect(!MarkdownEditing.isTableRow("a | b"))
+        #expect(MarkdownEditing.isTableSeparator("| --- | :---: |"))
+        #expect(!MarkdownEditing.isTableSeparator("| a | b |"))
+    }
+
+    @Test func formattingPadsEveryCellToTheWidestInItsColumn() {
+        let text = "| Name | Qty |\n| --- | --- |\n| Apples | 3 |\n"
+        let edit = MarkdownEditing.edit(.formatTable, in: text, selection: NSRange(location: 2, length: 0))
+        #expect(edit.replacement == "| Name   | Qty |\n| ------ | --- |\n| Apples | 3   |\n")
+    }
+
+    @Test func formattingKeepsColumnAlignmentMarks() {
+        let text = "| A | B |\n| :-- | --: |\n| x | y |"
+        let edit = MarkdownEditing.edit(.formatTable, in: text, selection: NSRange(location: 2, length: 0))
+        #expect(edit.replacement.contains("| :-- | --: |"))
+    }
+
+    @Test func formattingOutsideATableChangesNothing() {
+        let edit = MarkdownEditing.edit(.formatTable, in: "plain text", selection: NSRange(location: 3, length: 0))
+        #expect(edit.replacement.isEmpty)
+        #expect(edit.range.length == 0)
     }
 }
