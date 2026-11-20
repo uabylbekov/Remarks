@@ -12,6 +12,8 @@ Status: Draft v0.2 (2026-11-19). Scope confirmed: text font, code font, and code
 | S3 | `NSUbiquitousKeyValueStore` plus a local `UserDefaults` copy. **Not yet verified between two devices** |
 | Entry points | macOS: Settings window (⌘,). iOS and iPadOS: Appearance button in the sidebar toolbar |
 
+**Code fonts (added 2026-11-19).** The code font picker offers SF Mono, Menlo, and Courier New from the system, and three fonts that ship inside the app: **Fira Code**, **JetBrains Mono**, and **IBM Plex Mono**. All three are under the SIL Open Font License 1.1, and their license texts ship in the app bundle next to the fonts (`Notes/Fonts/*-OFL.txt`). Regular and Bold are included for each, plus Italic and Bold Italic where the family has them (Fira Code has no italic). They are registered for the app's process at launch (`BundledFonts.register()`), so nothing is installed on the device. About 2.2 MB. Fira Code and JetBrains Mono turn `->` and `!=` into ligatures by default; there is no switch to turn that off yet. Other installed fonts still work through "Choose Installed Font…".
+
 **Not built yet:** F6 line spacing (the setting exists in the data, but nothing uses it); theme bold and italic (themes carry them, the editor only applies color); Increase Contrast switching to the High Contrast theme automatically (T4 "pin or match system" is a plain picker for now); a font picker for the Mac that shows a font panel instead of a menu.
 
 ## Goal

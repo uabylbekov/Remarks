@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppIntents
 import NotesCore
 
 @main struct MyApp: App {
@@ -10,6 +11,9 @@ import NotesCore
     @State private var monitor = SyncMonitor()
 
     init() {
+        // Before anything is styled: makes the code fonts that ship inside the app usable by name.
+        BundledFonts.register()
+
         #if DEBUG
         // Release checklist step (specs/02-sync.md): creates every CloudKit field in the development
         // environment. It must run before the container below exists.
@@ -24,6 +28,14 @@ import NotesCore
         #endif
         store = Result { try NotesStore.makeContainer() }
         history = (try? HistoryStore.makeContainer()).map { HistoryRecorder(container: $0) }
+
+        // Siri and Shortcuts can start the app with no window and run an intent straight away, so everything an
+        // intent needs is registered here, not in a view (an unregistered dependency crashes).
+        if case .success(let container) = store {
+            AppDependencyManager.shared.add(dependency: NotesService(modelContainer: container))
+        }
+        let router = NavigationRouter.shared
+        AppDependencyManager.shared.add(dependency: router)
     }
 
     var body: some Scene {

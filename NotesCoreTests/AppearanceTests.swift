@@ -75,3 +75,36 @@ struct AppearanceTests {
         #expect(theme.text.dark.contrast(with: theme.background.dark) >= 4.5)
     }
 }
+
+/// Spec 11, F2: the code fonts offered in Settings.
+struct CodeFontTests {
+    @Test func everyOptionHasAUniqueIDAndName() {
+        #expect(Set(CodeFonts.all.map(\.id)).count == CodeFonts.all.count)
+        #expect(Set(CodeFonts.all.map(\.name)).count == CodeFonts.all.count)
+    }
+
+    @Test func theDefaultCodeFontIsTheFirstOption() {
+        #expect(CodeFonts.all.first?.choice == AppearanceSettings().codeFont)
+    }
+
+    @Test func everyBundledOptionHasItsRegularFaceInTheBundledFiles() {
+        for option in CodeFonts.all where option.isBundled {
+            guard case .custom(let postScriptName, _) = option.choice else {
+                Issue.record("\(option.name) is bundled but not a named font")
+                continue
+            }
+            #expect(CodeFonts.bundledFileNames.contains(postScriptName), "\(option.name)")
+        }
+    }
+
+    @Test func bundledFilesAreListedOnce() {
+        #expect(Set(CodeFonts.bundledFileNames).count == CodeFonts.bundledFileNames.count)
+    }
+
+    @Test func aSavedChoiceMapsBackToItsOption() {
+        let fira = CodeFonts.all.first { $0.id == "fira-code" }
+        #expect(fira != nil)
+        #expect(CodeFonts.option(for: fira?.choice ?? .system)?.name == "Fira Code")
+        #expect(CodeFonts.option(for: .custom(postScriptName: "Unknown", family: "Unknown")) == nil)
+    }
+}

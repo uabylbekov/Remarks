@@ -18,6 +18,7 @@ struct SidebarView: View {
     @Query(filter: #Predicate<Folder> { $0.parent == nil && $0.deletedAt == nil }, sort: \Folder.sortIndex)
     private var rootFolders: [Folder]
     @Query(sort: \Tag.name) private var tags: [Tag]
+    @Environment(\.deviceBottomInset) private var deviceBottomInset
     @State private var prompt: NamePrompt?
     @State private var promptText = ""
     #if os(iOS)
@@ -50,12 +51,16 @@ struct SidebarView: View {
             Section {
                 Label("Recently Deleted", systemImage: "trash").tag(NoteScope.trash)
             }
-
-            Section {
-                SyncStatusButton()
-            }
         }
         .navigationTitle("Notes")
+        // Pinned to the window's bottom edge, not the column's. The column's bottom edge moves while the note list's
+        // search field slides away, which made the text jump when going back.
+        .overlay(alignment: .bottom) {
+            SyncStatusFooter()
+                .padding(.bottom, deviceBottomInset)
+                .ignoresSafeArea(.container, edges: .bottom)
+        }
+        .contentMargins(.bottom, 56 + deviceBottomInset, for: .scrollContent)
         #if os(iOS)
         .sheet(isPresented: $showsAppearance) {
             NavigationStack {

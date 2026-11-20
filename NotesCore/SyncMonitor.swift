@@ -24,6 +24,12 @@ public final class SyncMonitor {
         self.containerID = containerID
     }
 
+    /// A monitor that shows a given state and never talks to CloudKit. For previews and tests.
+    public convenience init(showing state: SyncState) {
+        self.init()
+        self.state = state
+    }
+
     public func start() {
         guard tasks.isEmpty else { return }
         tasks = [

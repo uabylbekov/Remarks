@@ -13,11 +13,45 @@ import AppKit
 /// and immediately when editing ends or the editor goes away.
 struct NoteEditor: View {
     let note: Note
+    /// Where to put the caret when the note first appears. Used by previews, to show a note while editing.
+    var initialSelection: Int?
     @Environment(\.history) private var history
+
+    @State private var notice: String?
 
     var body: some View {
         // Reading the revision here makes SwiftUI update the text view whenever an appearance setting changes.
-        NoteTextView(note: note, history: history, appearanceRevision: AppearanceModel.shared.revision)
+        NoteTextView(
+            note: note,
+            history: history,
+            appearanceRevision: AppearanceModel.shared.revision,
+            onKeptEdits: { showNotice() },
+            initialSelection: initialSelection
+        )
+        .overlay(alignment: .top) {
+            if let notice {
+                Label(notice, systemImage: "clock.arrow.circlepath")
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: .capsule)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.default, value: notice)
+    }
+
+    /// The note was changed from outside while you were typing. Your text stays, and the other version
+    /// is in Version History.
+    private func showNotice() {
+        let message = String(localized: "Another change was saved to Version History")
+        notice = message
+        AccessibilityNotification.Announcement(message).post()
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if notice == message { notice = nil }
+        }
     }
 }
 
@@ -71,6 +105,8 @@ private struct NoteTextView: UIViewRepresentable {
     let note: Note
     let history: HistoryRecorder?
     let appearanceRevision: Int
+    let onKeptEdits: () -> Void
+    var initialSelection: Int?
 
     func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history) }
 
@@ -87,11 +123,15 @@ private struct NoteTextView: UIViewRepresentable {
         textView.smartInsertDeleteType = .no
         textView.delegate = context.coordinator
         context.coordinator.attach(to: textView)
+        if let initialSelection {
+            textView.selectedRange = NSRange(location: min(initialSelection, textView.textStorage.length), length: 0)
+        }
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.update(note: note)
+        context.coordinator.onKeptEdits = onKeptEdits
         context.coordinator.applyAppearance(revision: appearanceRevision)
     }
 
@@ -159,6 +199,9 @@ private struct NoteTextView: UIViewRepresentable {
         }
 
         private var appearanceRevision = AppearanceModel.shared.revision
+        /// The text last loaded into, or saved from, the editor. See `EditorSync`.
+        private var baseBody = ""
+        var onKeptEdits: (() -> Void)?
 
         /// Re-styles the open note after a font, size, or theme change (Spec 11, S2).
         func applyAppearance(revision: Int) {
@@ -176,17 +219,32 @@ private struct NoteTextView: UIViewRepresentable {
                 flushSave()
                 note = newNote
                 load()
-            } else if !textView.isFirstResponder, textView.text != note.body {
-                // Never replace text under the user's cursor. Outside editing, follow the stored note,
-                // but first keep the text that is about to be replaced (Spec 02, S2).
-                history?.record(noteID: note.id, body: textView.text, reason: .beforeSyncUpdate, force: true)
+            } else {
+                followStoredNote(editorText: textView.text)
+            }
+        }
+
+        /// The stored note may have changed under the editor (iCloud, Siri, Shortcuts). Never replace text the
+        /// user has typed, and never lose either side (Spec 06).
+        private func followStoredNote(editorText: String) {
+            switch EditorSync.decide(editorText: editorText, baseBody: baseBody, incomingBody: note.body) {
+            case .keepEditorText:
+                break
+            case .adoptIncoming:
+                // Keep the text that is about to be replaced (Spec 02, S2).
+                history?.record(noteID: note.id, body: editorText, reason: .beforeSyncUpdate, force: true)
                 load()
+            case .keepTypedTextAndSaveIncoming:
+                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
+                baseBody = note.body
+                onKeptEdits?()
             }
         }
 
         private func load() {
             guard let textView else { return }
             textView.text = note.body
+            baseBody = note.body
             preview?.reload()
             highlighter?.apply()
             if note.body.isEmpty {
@@ -197,11 +255,22 @@ private struct NoteTextView: UIViewRepresentable {
 
         // MARK: Saving
 
+        /// Writes the editor's text to the note, but only if the user changed it. Saving unchanged text could
+        /// undo an outside change the editor has not shown yet. Text the editor never saw is kept as a version first.
+        private func saveIfTyped(_ text: String) {
+            guard text != baseBody else { return }
+            if EditorSync.unseenTextBeingOverwritten(editorText: text, baseBody: baseBody, storedBody: note.body) {
+                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
+            }
+            note.setBody(text)
+            baseBody = note.body
+            history?.record(noteID: note.id, body: note.body, reason: .edit)
+        }
+
         func flushSave() {
             saveTask?.cancel()
             guard let textView else { return }
-            note.setBody(textView.text)
-            history?.record(noteID: note.id, body: note.body, reason: .edit)
+            saveIfTyped(textView.text)
         }
 
         private func scheduleSave() {
@@ -267,6 +336,8 @@ private struct NoteTextView: NSViewRepresentable {
     let note: Note
     let history: HistoryRecorder?
     let appearanceRevision: Int
+    let onKeptEdits: () -> Void
+    var initialSelection: Int?
 
     func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history) }
 
@@ -283,11 +354,15 @@ private struct NoteTextView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.delegate = context.coordinator
         context.coordinator.attach(to: textView)
+        if let initialSelection {
+            textView.setSelectedRange(NSRange(location: min(initialSelection, textView.string.utf16.count), length: 0))
+        }
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.update(note: note)
+        context.coordinator.onKeptEdits = onKeptEdits
         context.coordinator.applyAppearance(revision: appearanceRevision)
     }
 
@@ -328,6 +403,9 @@ private struct NoteTextView: NSViewRepresentable {
         }
 
         private var appearanceRevision = AppearanceModel.shared.revision
+        /// The text last loaded into, or saved from, the editor. See `EditorSync`.
+        private var baseBody = ""
+        var onKeptEdits: (() -> Void)?
 
         /// Re-styles the open note after a font, size, or theme change (Spec 11, S2).
         func applyAppearance(revision: Int) {
@@ -340,22 +418,36 @@ private struct NoteTextView: NSViewRepresentable {
 
         func update(note newNote: Note) {
             guard let textView else { return }
-            let isEditing = textView.window?.firstResponder === textView
             if newNote.id != note.id {
                 flushSave()
                 note = newNote
                 load()
-            } else if !isEditing, textView.string != note.body {
-                // Never replace text under the user's cursor. Outside editing, follow the stored note,
-                // but first keep the text that is about to be replaced (Spec 02, S2).
-                history?.record(noteID: note.id, body: textView.string, reason: .beforeSyncUpdate, force: true)
+            } else {
+                followStoredNote(editorText: textView.string)
+            }
+        }
+
+        /// The stored note may have changed under the editor (iCloud, Siri, Shortcuts). Never replace text the
+        /// user has typed, and never lose either side (Spec 06).
+        private func followStoredNote(editorText: String) {
+            switch EditorSync.decide(editorText: editorText, baseBody: baseBody, incomingBody: note.body) {
+            case .keepEditorText:
+                break
+            case .adoptIncoming:
+                // Keep the text that is about to be replaced (Spec 02, S2).
+                history?.record(noteID: note.id, body: editorText, reason: .beforeSyncUpdate, force: true)
                 load()
+            case .keepTypedTextAndSaveIncoming:
+                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
+                baseBody = note.body
+                onKeptEdits?()
             }
         }
 
         private func load() {
             guard let textView else { return }
             textView.string = note.body
+            baseBody = note.body
             preview?.reload()
             highlighter?.apply()
             if note.body.isEmpty {
@@ -365,11 +457,22 @@ private struct NoteTextView: NSViewRepresentable {
 
         // MARK: Saving
 
+        /// Writes the editor's text to the note, but only if the user changed it. Saving unchanged text could
+        /// undo an outside change the editor has not shown yet. Text the editor never saw is kept as a version first.
+        private func saveIfTyped(_ text: String) {
+            guard text != baseBody else { return }
+            if EditorSync.unseenTextBeingOverwritten(editorText: text, baseBody: baseBody, storedBody: note.body) {
+                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
+            }
+            note.setBody(text)
+            baseBody = note.body
+            history?.record(noteID: note.id, body: note.body, reason: .edit)
+        }
+
         func flushSave() {
             saveTask?.cancel()
             guard let textView else { return }
-            note.setBody(textView.string)
-            history?.record(noteID: note.id, body: note.body, reason: .edit)
+            saveIfTyped(textView.string)
         }
 
         private func scheduleSave() {
@@ -485,6 +588,7 @@ private struct NoteTextView: NSViewRepresentable {
     // Fetch a note
     func note(id: Int) async throws -> Note {
         let (data, _) = try await URLSession.shared.data(from: url)
+
         return try JSONDecoder().decode(Note.self, from: data)
     }
     ```
@@ -498,4 +602,37 @@ private struct NoteTextView: NSViewRepresentable {
     """)
     container.mainContext.insert(note)
     return NoteEditor(note: note).modelContainer(container)
+}
+
+#Preview("Reading a code block") {
+    codeBlockPreview(editing: false)
+}
+
+#Preview("Editing in a code block") {
+    codeBlockPreview(editing: true)
+}
+
+/// The same note twice, so the card can be compared with the cursor outside and inside it.
+@MainActor
+private func codeBlockPreview(editing: Bool) -> some View {
+    let container = (try? NotesStore.makeContainer(inMemory: true)) ?? { fatalError("in-memory container failed") }()
+    let body = """
+    # Project notes
+
+    ```swift
+    // Fetch a note
+    func note(id: Int) async throws -> Note {
+        let (data, _) = try await URLSession.shared.data(from: url)
+
+        return try JSONDecoder().decode(Note.self, from: data)
+    }
+    ```
+
+    After the code.
+    """
+    let note = Note(body: body)
+    container.mainContext.insert(note)
+    // Inside the block, so its fences show.
+    let caret = (body as NSString).range(of: "func note").location
+    return NoteEditor(note: note, initialSelection: editing ? caret : nil).modelContainer(container)
 }

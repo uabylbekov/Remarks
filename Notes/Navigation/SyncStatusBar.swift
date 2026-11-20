@@ -13,7 +13,7 @@ extension SyncSummary {
         case .syncing: "Syncing…"
         case .problem(.storageFull): "iCloud storage is full"
         case .problem(.other): "Sync problem"
-        case .upToDate: "Up to date"
+        case .upToDate: "Synced"
         }
     }
 
@@ -64,27 +64,44 @@ extension SyncSummary {
     }
 }
 
-/// The sync status as a standard sidebar row: a `Label` with a tinted iCloud symbol, and a popover for details.
-struct SyncStatusButton: View {
+extension EnvironmentValues {
+    /// The bottom safe area of the whole window (the home indicator), measured outside the navigation container.
+    /// Unlike the safe area inside a column, it does not change when a toolbar, such as the note list's search
+    /// field, appears or goes away, so a footer placed with it stays still while navigating.
+    @Entry var deviceBottomInset: CGFloat = 0
+}
+
+/// The sync status as quiet, centered grey text at the bottom of the sidebar, with no icon and no container:
+/// the state ("Synced", "Syncing…", "Offline") and, under it, when it last synced. Tap for the full explanation.
+struct SyncStatusFooter: View {
     @Environment(SyncMonitor.self) private var monitor
     @State private var showsDetail = false
 
     var body: some View {
         let summary = monitor.state.summary
+        let lastSuccess = monitor.state.lastSuccess
         Button {
             showsDetail = true
         } label: {
-            Label {
-                Text(summary.title)
-            } icon: {
-                Image(systemName: summary.symbol)
-                    .foregroundStyle(summary.tint)
-                    .symbolEffect(.rotate, isActive: summary == .syncing)
+            // Refreshes once a minute, so "2 minutes ago" does not go stale while the app stays open.
+            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                VStack(spacing: 2) {
+                    Text(summary.title)
+                    if let lastSuccess {
+                        Text("Last synced \(lastSuccess.formatted(.relative(presentation: .named)))")
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(summary.isProblem ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
-            .font(.footnote)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("iCloud sync: \(summary.title)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText(summary, lastSuccess))
         .accessibilityHint("Shows details")
         .popover(isPresented: $showsDetail) {
             VStack(alignment: .leading, spacing: 8) {
@@ -101,4 +118,34 @@ struct SyncStatusButton: View {
             .presentationCompactAdaptation(.popover)
         }
     }
+
+    private func accessibilityText(_ summary: SyncSummary, _ lastSuccess: Date?) -> String {
+        guard let lastSuccess else { return "iCloud sync: \(summary.title)" }
+        return "iCloud sync: \(summary.title). Last synced \(lastSuccess.formatted(.relative(presentation: .named)))"
+    }
+}
+
+extension SyncSummary {
+    /// States where something needs attention. Only these leave the quiet grey.
+    var isProblem: Bool {
+        switch self {
+        case .problem, .unavailable, .restricted: true
+        case .checking, .signedOut, .offline, .syncing, .upToDate: false
+        }
+    }
+}
+
+#Preview("Synced") {
+    var state = SyncState()
+    state.apply(.account(.available))
+    state.apply(.finished(.exporting, at: .now.addingTimeInterval(-5 * 60), problem: nil))
+    return SyncStatusFooter().environment(SyncMonitor(showing: state)).frame(width: 260)
+}
+
+#Preview("Offline") {
+    var state = SyncState()
+    state.apply(.account(.available))
+    state.apply(.finished(.importing, at: .now.addingTimeInterval(-3 * 3600), problem: nil))
+    state.apply(.network(isOnline: false))
+    return SyncStatusFooter().environment(SyncMonitor(showing: state)).frame(width: 260)
 }

@@ -26,7 +26,7 @@ Legend: [x] done, [ ] to do.
 - [x] T9. Folders: create with `sortIndex`, cycle-safe move, trash and restore of a subtree
 - [x] T10. Tags and dedupe: normalized find-or-create, merge duplicate tags, resolve duplicate note IDs
 - [x] T11. Purge items trashed 30 days or more
-- [ ] T11b. `@ModelActor` wrappers for background work (needed when a caller is off the main actor, for example App Intents and the purge schedule)
+- [x] T11b. `NotesService`, a `@ModelActor` for work off the main actor (App Intents, and later MCP). The purge schedule still runs on the main context
 
 ### Tests (Spec 01 acceptance criteria 3 and 4)
 - [x] T12. Derived fields: empty, single-line, multi-line, emoji, fenced code, tilde fences, heading marks

@@ -11,6 +11,8 @@ enum CodeBlockPosition: Int {
 /// Draws the rounded background behind code block lines.
 final class CodeBlockFragment: NSTextLayoutFragment {
     private static let cornerRadius: CGFloat = 10
+    /// Neighboring lines overlap by this much, so no hairline seam shows between them at fractional pixel positions.
+    private static let overlap: CGFloat = 0.75
 
     private var containerWidth: CGFloat {
         textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
@@ -26,14 +28,22 @@ final class CodeBlockFragment: NSTextLayoutFragment {
     override var renderingSurfaceBounds: CGRect {
         // The fragment's frame starts at the text's indent, but the background starts at the container edge.
         super.renderingSurfaceBounds.union(
-            CGRect(x: -layoutFragmentFrame.minX, y: 0, width: containerWidth, height: layoutFragmentFrame.height)
+            CGRect(x: -layoutFragmentFrame.minX, y: -Self.overlap, width: containerWidth, height: layoutFragmentFrame.height + 2 * Self.overlap)
         )
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
-        let rect = CGRect(x: point.x - layoutFragmentFrame.minX, y: point.y, width: containerWidth, height: layoutFragmentFrame.height)
         let top = (position == .first || position == .only) ? Self.cornerRadius : 0
         let bottom = (position == .last || position == .only) ? Self.cornerRadius : 0
+        // Square edges that meet another line reach a little into it.
+        let extendUp = top > 0 ? 0 : Self.overlap
+        let extendDown = bottom > 0 ? 0 : Self.overlap
+        let rect = CGRect(
+            x: point.x - layoutFragmentFrame.minX,
+            y: point.y - extendUp,
+            width: containerWidth,
+            height: layoutFragmentFrame.height + extendUp + extendDown
+        )
 
         context.saveGState()
         context.setFillColor(EditorTheme.codeBackground.cgColor)
@@ -55,7 +65,8 @@ final class CodeBlockFragment: NSTextLayoutFragment {
         ])
         // Line up with the code below: the block's inset plus the text container's own side padding.
         let padding = textLayoutManager?.textContainer?.lineFragmentPadding ?? 5
-        let origin = CGPoint(x: point.x - layoutFragmentFrame.minX + LivePreviewController.codeInset + padding, y: point.y + 8)
+        let origin = CGPoint(x: point.x - layoutFragmentFrame.minX + LivePreviewController.codeInset + padding,
+                            y: point.y + LivePreviewController.cardPadding + 4)
         #if canImport(UIKit)
         UIGraphicsPushContext(context)
         label.draw(at: origin)
@@ -158,9 +169,13 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     private static let headingRegex = try? NSRegularExpression(pattern: "^(#{1,6})[ \\t]+")
     private static let checklistRegex = try? NSRegularExpression(pattern: #"^([ \t]*)([-*+][ \t]+\[([ xX]?)\](?:[ \t]+|$))"#)
     static let codeInset: CGFloat = 12
-    private static let codePadding: CGFloat = 10
-    /// Extra room above the first line for the language label.
-    private static let headerHeight: CGFloat = 16
+    /// Space above the first and below the last line of a code card.
+    static let cardPadding: CGFloat = 4
+    /// The height of the two fence rows. Each is the same whether its fence is shown or hidden, so the card never
+    /// changes size when the cursor enters or leaves it. While idle the opening row holds the language label,
+    /// and is taller so a small gap separates the label from the first line of code.
+    static let openFenceRow: CGFloat = 28
+    static let closeFenceRow: CGFloat = 18
 
     private weak var contentStorage: NSTextContentStorage?
     private weak var layoutManager: NSTextLayoutManager?
@@ -281,23 +296,19 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
 
     private func styleCodeParagraph(_ paragraph: NSMutableAttributedString, range: NSRange, block: CodeBlock, storage: NSTextStorage) {
         let full = NSRange(location: 0, length: paragraph.length)
-        let isFence = range.location == block.open.location || range.location == block.close?.location
+        let isOpen = range.location == block.open.location
+        let isClose = block.close.map { range.location == $0.location } ?? false
+        let isFence = isOpen || isClose
         let isActive = activeBlock(at: caret, length: storage.length) == block
 
-        if isFence && !isActive {
-            collapse(paragraph, range: full)
-            return
-        }
-
-        // Which visible line is first and last decides the rounded corners and the padding.
+        // The opening fence is always the first row. The last row is the closing fence, or the last line of
+        // code if the block was never closed. Both fence rows keep their height whether shown or hidden.
         let source = storage.string as NSString
         let body = block.body
-        let firstBody: Int? = body.length > 0 ? body.location : nil
         let lastBody: Int? = body.length > 0 ? source.lineRange(for: NSRange(location: NSMaxRange(body) - 1, length: 0)).location : nil
-        let firstVisible = isActive ? block.open.location : firstBody
-        let lastVisible = isActive ? (block.close?.location ?? lastBody ?? block.open.location) : lastBody
-        let isFirst = range.location == firstVisible
-        let isLast = range.location == lastVisible
+        let lastRow = block.close?.location ?? lastBody ?? block.open.location
+        let isFirst = isOpen
+        let isLast = range.location == lastRow
         let position: CodeBlockPosition = switch (isFirst, isLast) {
         case (true, true): .only
         case (true, false): .first
@@ -309,19 +320,24 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         style.firstLineHeadIndent = Self.codeInset
         style.headIndent = Self.codeInset
         style.tailIndent = -Self.codeInset
-        // While the block is not being edited, its fences are hidden and a small language label heads the card.
-        let showsLabel = isFirst && !isActive && !block.language.isEmpty
-        style.paragraphSpacingBefore = isFirst ? Self.codePadding + (showsLabel ? Self.headerHeight : 0) : 0
-        style.paragraphSpacing = isLast ? Self.codePadding : 0
+        style.paragraphSpacingBefore = isFirst ? Self.cardPadding : 0
+        style.paragraphSpacing = isLast ? Self.cardPadding : 0
+        if isFence {
+            let row = isOpen ? Self.openFenceRow : Self.closeFenceRow
+            style.minimumLineHeight = row
+            style.maximumLineHeight = row
+        }
 
         paragraph.addAttribute(.font, value: EditorTheme.codeFont, range: full)
         paragraph.addAttribute(.paragraphStyle, value: style, range: full)
         paragraph.addAttribute(Self.blockPositionKey, value: position.rawValue, range: full)
-        if showsLabel { paragraph.addAttribute(Self.languageKey, value: block.language, range: full) }
         if isFence {
-            // Visible fences (while editing) are small and quiet, so they read as part of the card's frame.
+            // Small and quiet while editing. Hidden, but still taking its room, otherwise.
             let small = EditorFont.monospacedSystemFont(ofSize: EditorTheme.codeFont.pointSize * 0.8, weight: .regular)
-            paragraph.addAttributes([.font: small, .foregroundColor: EditorTheme.dimColor], range: full)
+            paragraph.addAttributes([.font: small, .foregroundColor: isActive ? EditorTheme.dimColor : EditorColor.clear], range: full)
+        }
+        if isOpen, !isActive, !block.language.isEmpty {
+            paragraph.addAttribute(Self.languageKey, value: block.language, range: full)
         }
     }
 

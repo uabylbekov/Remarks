@@ -24,12 +24,15 @@ public enum SnapshotReason: String, Sendable {
     case edit
     case beforeSyncUpdate
     case beforeRestore
+    /// The other side of an edit made at the same time (from iCloud, Siri, or Shortcuts) while the note was open.
+    case otherVersion
 
     public var label: String {
         switch self {
         case .edit: "Saved edit"
         case .beforeSyncUpdate: "Before an update from iCloud"
         case .beforeRestore: "Before a restore"
+        case .otherVersion: "Changed at the same time as your edit"
         }
     }
 }

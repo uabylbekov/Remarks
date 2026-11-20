@@ -44,8 +44,9 @@ struct AppearanceSettingsView: View {
                 FontChoiceRow(
                     title: "Font",
                     choice: $model.settings.codeFont,
-                    presets: [.design(.monospaced)],
-                    monospacedOnly: true
+                    presets: CodeFonts.all.map(\.choice),
+                    monospacedOnly: true,
+                    displayName: { CodeFonts.option(for: $0)?.name }
                 )
                 Picker("Theme", selection: $model.settings.codeThemeID) {
                     ForEach(CodeTheme.builtIn) { theme in
@@ -55,7 +56,7 @@ struct AppearanceSettingsView: View {
             } header: {
                 Text("Code")
             } footer: {
-                Text("Themes follow light and dark appearance.")
+                Text("Fira Code, JetBrains Mono, and IBM Plex Mono come with the app under the SIL Open Font License. Themes follow light and dark appearance.")
             }
 
             Section {
@@ -78,15 +79,21 @@ private struct FontChoiceRow: View {
     @Binding var choice: FontChoice
     let presets: [FontChoice]
     let monospacedOnly: Bool
+    /// A friendlier name for a choice, when the caller has one (the code fonts do).
+    var displayName: (FontChoice) -> String? = { _ in nil }
     @State private var showsFontPicker = false
+
+    private func name(of choice: FontChoice) -> String {
+        displayName(choice) ?? Self.name(of: choice)
+    }
 
     var body: some View {
         Picker(title, selection: $choice) {
             ForEach(presets, id: \.self) { preset in
-                Text(Self.name(of: preset)).tag(preset)
+                Text(name(of: preset)).tag(preset)
             }
             if case .custom = choice, !presets.contains(choice) {
-                Text(Self.name(of: choice)).tag(choice)
+                Text(name(of: choice)).tag(choice)
             }
         }
 
@@ -222,4 +229,11 @@ private struct AppearancePreview: View {
 
 #Preview {
     NavigationStack { AppearanceSettingsView() }
+}
+
+#Preview("Fira Code") {
+    // Previews do not run `MyApp.init`, so register the bundled fonts here.
+    BundledFonts.register()
+    AppearanceModel.shared.settings.codeFont = CodeFonts.all.first { $0.id == "fira-code" }?.choice ?? .design(.monospaced)
+    return NavigationStack { AppearanceSettingsView() }
 }

@@ -28,8 +28,18 @@ final class MarkdownAccessoryView: UIInputView {
     ]
 
     init(onCommand: @escaping (MarkdownCommand) -> Void, onDismiss: @escaping () -> Void) {
-        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 48), inputViewStyle: .keyboard)
+        // The default style draws no background of its own, so only the glass bar below is visible.
+        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 56), inputViewStyle: .default)
         allowsSelfSizing = true
+        backgroundColor = .clear
+        isOpaque = false
+
+        // A floating capsule of Liquid Glass, as the system's own toolbars use.
+        let glass = UIGlassEffect()
+        glass.isInteractive = true
+        let bar = UIVisualEffectView(effect: glass)
+        bar.cornerConfiguration = .capsule()
+        bar.translatesAutoresizingMaskIntoConstraints = false
 
         let stack = UIStackView(arrangedSubviews: Self.items.map { Self.button(for: $0, action: onCommand) })
         stack.axis = .horizontal
@@ -48,20 +58,26 @@ final class MarkdownAccessoryView: UIInputView {
         dismiss.accessibilityLabel = "Hide keyboard"
         dismiss.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(scroll)
-        addSubview(dismiss)
+        addSubview(bar)
+        bar.contentView.addSubview(scroll)
+        bar.contentView.addSubview(dismiss)
         NSLayoutConstraint.activate([
-            dismiss.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
-            dismiss.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dismiss.widthAnchor.constraint(equalToConstant: 48),
+            bar.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 8),
+            bar.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            bar.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
 
-            scroll.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
+            dismiss.trailingAnchor.constraint(equalTo: bar.contentView.trailingAnchor, constant: -4),
+            dismiss.centerYAnchor.constraint(equalTo: bar.contentView.centerYAnchor),
+            dismiss.widthAnchor.constraint(equalToConstant: 44),
+
+            scroll.leadingAnchor.constraint(equalTo: bar.contentView.leadingAnchor, constant: 6),
             scroll.trailingAnchor.constraint(equalTo: dismiss.leadingAnchor),
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: bar.contentView.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bar.contentView.bottomAnchor),
 
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 6),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 4),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -4),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
             stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),

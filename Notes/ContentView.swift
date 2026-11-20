@@ -7,8 +7,18 @@ import NotesCore
 struct ContentView: View {
     @State private var scope: NoteScope? = .all
     @State private var selectedNoteID: UUID?
+    private let router = NavigationRouter.shared
 
     var body: some View {
+        // Measured outside the navigation container, so it is the window's own inset (see `deviceBottomInset`).
+        GeometryReader { proxy in
+            splitView.environment(\.deviceBottomInset, proxy.safeAreaInsets.bottom)
+        }
+        // Only the container area. The keyboard must still push the editor up.
+        .ignoresSafeArea(.container)
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             SidebarView(selection: $scope)
         } content: {
@@ -21,6 +31,16 @@ struct ContentView: View {
             }
         }
         .onChange(of: scope) { selectedNoteID = nil }
+        // "Open Note" from Siri or Shortcuts. `initial: true` also catches a request made before this view existed.
+        .onChange(of: router.pendingNoteID, initial: true) { _, noteID in
+            guard let noteID else { return }
+            if scope != .all { scope = .all }
+            // Wait one turn, so the scope change above does not clear the selection we are about to make.
+            Task { @MainActor in
+                selectedNoteID = noteID
+                router.didOpen()
+            }
+        }
     }
 }
 
