@@ -11,8 +11,15 @@ struct ChecklistElement: MarkdownElement {
         let markRange = NSRange(location: markPosition.location - line.range.location, length: markPosition.length)
 
         let base = (paragraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont) ?? EditorTheme.proseFont
+        #if os(iOS)
+        // The size Apple Notes uses on iPhone: about 24 points beside body text, scaling with the font, so it is also a
+        // target for a finger. It can be taller than its line, so the fragment draws outside the line (see below).
+        let side = max(22, base.pointSize * 1.4)
+        let hiddenWidth = side + 10
+        #else
         let side = max(14, base.capHeight * 1.4)
         let hiddenWidth = side + 8
+        #endif
         // The native glyph holds identical space for [ ], [x], and [] without measuring hidden text.
         // This is a display paragraph; source characters and UTF-16 offsets are preserved.
         InlineStyler.collapse(paragraph, range: markRange)
@@ -26,13 +33,21 @@ struct ChecklistElement: MarkdownElement {
         paragraph.addAttribute(LivePreviewController.checklistKey, value: isChecked ? 2 : 1, range: full)
         paragraph.addAttribute(LivePreviewController.checklistWidthKey, value: Double(hiddenWidth), range: full)
         InlineStyler.applyHangingIndent(paragraph, through: NSMaxRange(markRange))
+        #if os(iOS)
+        // Air between items, or each circle touches the one below. After the item, so a wrapped item keeps its lines close.
+        if let style = paragraph.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
+           let spaced = style.mutableCopy() as? NSMutableParagraphStyle {
+            spaced.paragraphSpacing = max(spaced.paragraphSpacing, 8)
+            paragraph.addAttribute(.paragraphStyle, value: spaced.copy(), range: full)
+        }
+        #endif
 
         if isChecked {
             let content = NSRange(location: NSMaxRange(markRange), length: max(0, full.length - NSMaxRange(markRange)))
             paragraph.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: content)
             paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: content)
         }
-        _ = InlineStyler.style(paragraph, hidesMarkers: !services.showsMarkdown, shrinksMarkers: true)
+        _ = InlineStyler.style(paragraph, hidesMarkers: true, shrinksMarkers: true)
         return true
     }
 
@@ -49,7 +64,7 @@ struct ChecklistElement: MarkdownElement {
 
 // MARK: - Drawing
 
-/// Draws a checkbox in the space of a checklist item's hidden `- [ ] ` mark.
+/// Draws a round checkbox in the space of a checklist item's hidden `- [ ] ` mark.
 final class ChecklistFragment: NSTextLayoutFragment {
     private func number(for key: NSAttributedString.Key) -> CGFloat {
         let value = (textElement as? NSTextParagraph)?.attributedString.attribute(key, at: 0, effectiveRange: nil) as? NSNumber
@@ -64,12 +79,23 @@ final class ChecklistFragment: NSTextLayoutFragment {
         let marker = (paragraph?.string as NSString?)?.range(of: "\u{FFFC}").location ?? NSNotFound
         let markerX = marker != NSNotFound ? line?.locationForCharacter(at: marker).x ?? 0 : 0
         let lineHeight = line?.typographicBounds.height ?? layoutFragmentFrame.height
+        #if os(iOS)
+        let side = max(14, hiddenWidth - 10)
+        #else
         let side = max(14, min(lineHeight * 0.9, hiddenWidth - 6))
+        #endif
         let font = (textElement as? NSTextParagraph)?.attributedString.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont
         let baseline = (line?.typographicBounds.minY ?? 0) + (line?.glyphOrigin.y ?? lineHeight)
         let center = font.map { baseline - $0.capHeight / 2 } ?? lineHeight / 2
         return CGRect(x: layoutFragmentFrame.minX + (line?.typographicBounds.minX ?? 0) + markerX,
                       y: layoutFragmentFrame.minY + center - side / 2, width: side, height: side)
+    }
+
+    /// The circle may be taller than its line, and would be cut off at the line's edge without this.
+    override var renderingSurfaceBounds: CGRect {
+        let frame = layoutFragmentFrame
+        return super.renderingSurfaceBounds.union(
+            checkboxBounds.offsetBy(dx: -frame.minX, dy: -frame.minY).insetBy(dx: -2, dy: -2))
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
@@ -79,7 +105,8 @@ final class ChecklistFragment: NSTextLayoutFragment {
         let side = box.width
 
         context.saveGState()
-        let outline = CGPath(roundedRect: box.insetBy(dx: 0.75, dy: 0.75), cornerWidth: 3.5, cornerHeight: 3.5, transform: nil)
+        // A circle, as in Apple Notes: a ring while open, a filled disc with a check once done.
+        let outline = CGPath(ellipseIn: box.insetBy(dx: 0.75, dy: 0.75), transform: nil)
         if isChecked {
             context.setFillColor(EditorTheme.accentColor.cgColor)
             context.addPath(outline)

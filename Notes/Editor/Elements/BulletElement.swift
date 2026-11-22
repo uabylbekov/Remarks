@@ -12,7 +12,7 @@ struct BulletElement: MarkdownElement {
         var prefixEnd = NSMaxRange(mark)
         while prefixEnd < source.length, [32, 9].contains(source.character(at: prefixEnd)) { prefixEnd += 1 }
         InlineStyler.applyHangingIndent(paragraph, through: prefixEnd)
-        _ = InlineStyler.style(paragraph, hidesMarkers: !services.showsMarkdown, shrinksMarkers: true)
+        _ = InlineStyler.style(paragraph, hidesMarkers: true, shrinksMarkers: true)
         return true
     }
 }

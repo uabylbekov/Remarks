@@ -71,6 +71,7 @@ private struct NoteResultsList: View {
     let searchEverywhere: Bool
 
     @Environment(\.modelContext) private var context
+    @Environment(\.calendar) private var calendar
     @Query private var pinned: [Note]
     @Query private var unpinned: [Note]
     @Query private var folders: [Folder]
@@ -80,6 +81,7 @@ private struct NoteResultsList: View {
     @State private var deleteForeverTarget: Note?
     @State private var confirmsEmptyTrash = false
     @State private var errorMessage: String?
+    @State private var now = Date.now
 
     private var library: Library { Library(context: context) }
     private var isSearching: Bool { !NoteSearch.words(in: searchText).isEmpty }
@@ -105,45 +107,39 @@ private struct NoteResultsList: View {
 
     var body: some View {
         let results = results
-        noteList(results)
-            .onChange(of: ResultsKey(count: results.count, scope: scope, query: searchText, everywhere: searchEverywhere), initial: true) {
-                // A note that left the list (trashed, moved, no longer matching) cannot stay selected.
-                if let selectedNoteID, !results.contains(where: { $0.id == selectedNoteID }) {
-                    self.selectedNoteID = nil
-                }
+        noteList(results, now: now)
+        // The headings and the dates in the rows are by calendar day, so the list only has to be rebuilt at midnight.
+        // Rebuilding it on a timer has the table lay its rows out again while the notes are being edited.
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: .NSCalendarDayChanged) { now = .now }
+        }
+        .onChange(of: ResultsKey(count: results.count, scope: scope, query: searchText, everywhere: searchEverywhere), initial: true) {
+            // A note that left the list (trashed, moved, no longer matching) cannot stay selected.
+            if let selectedNoteID, !results.contains(where: { $0.id == selectedNoteID }) {
+                self.selectedNoteID = nil
             }
+        }
     }
 
-    private func noteList(_ results: [Note]) -> some View {
+    private func noteList(_ results: [Note], now: Date) -> some View {
         List(selection: $selectedNoteID) {
-            ForEach(results) { note in
-                NavigationLink(value: note.id) {
-                    NoteRow(note: note, query: searchText, showsFolder: scope == .all || isSearching)
+            if isSearching {
+                // Ranked matches, not grouped: the order says how well each note matches.
+                ForEach(results) { row($0, now: now) }
+            } else {
+                if !pinned.isEmpty {
+                    headedSection(Label("Pinned", systemImage: "pin.fill")) {
+                        ForEach(pinned) { row($0, now: now) }
+                    }
                 }
-                    // Dragged onto a folder in the sidebar, the note moves there.
-                    .draggable(NoteReference(id: note.id))
-                    .swipeActions(edge: .leading) {
-                        if note.deletedAt != nil {
-                            Button("Restore", systemImage: "arrow.uturn.backward") { perform { library.restore(note) } }
-                        } else {
-                            Button(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin") {
-                                perform { note.setPinned(!note.isPinned) }
-                            }
-                        }
-                    }
-                    .swipeActions(edge: .trailing) {
-                        if note.deletedAt != nil {
-                            Button("Delete Forever", systemImage: "trash", role: .destructive) { deleteForeverTarget = note }
-                        } else {
-                            Button("Delete", systemImage: "trash", role: .destructive) { trash(note) }
-                        }
-                    }
-                    .contextMenu {
-                        NoteActionsMenu(note: note, onNewTag: { tagTarget = note }, onExport: { exportTarget = note }, onDeleteForever: { deleteForeverTarget = note }, onError: { errorMessage = $0 })
-                    }
+                dateSections(now: now)
             }
         }
         .navigationTitle(title)
+        #if os(macOS)
+        // As in Apple Notes, the title carries the number of notes under it.
+        .navigationSubtitle(Text("^[\(results.count) note](inflect: true)"))
+        #endif
         .toolbar {
             if scope == .trash {
                 ToolbarItem(placement: .primaryAction) {
@@ -196,6 +192,72 @@ private struct NoteResultsList: View {
             }
         }
         #endif
+    }
+
+    /// One section per date heading. The notes arrive newest first, so each heading takes a run of neighbors.
+    @ViewBuilder
+    private func dateSections(now: Date) -> some View {
+        let runs: [NoteDateGroup.Run] = NoteDateGroup.runs(of: unpinned, date: { $0.modifiedAt }, now: now, calendar: calendar)
+        ForEach(runs, id: \.group) { run in
+            headedSection(run.group.title(calendar: calendar)) {
+                ForEach(unpinned[run.range]) { row($0, now: now) }
+            }
+        }
+    }
+
+    /// A heading and the notes under it. On the Mac the heading is a plain row: a real section header floats at the top
+    /// of the list, and the table draws a divider line under it that no separator setting removes.
+    @ViewBuilder
+    private func headedSection<Heading: View, Rows: View>(_ heading: Heading, @ViewBuilder rows: () -> Rows) -> some View {
+        #if os(macOS)
+        Section {
+            heading
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+                .listRowSeparator(.hidden)
+                .selectionDisabled()
+                .accessibilityAddTraits(.isHeader)
+            rows()
+        }
+        #else
+        Section {
+            rows()
+        } header: {
+            heading
+        }
+        .headerProminence(.increased)
+        .listSectionSeparator(.hidden)
+        #endif
+    }
+
+    private func row(_ note: Note, now: Date) -> some View {
+        NavigationLink(value: note.id) {
+            NoteRow(note: note, now: now, query: searchText, showsFolder: scope == .all || isSearching, showsPin: isSearching)
+        }
+        // The date headings already group the notes, so no lines between rows, as in Apple Notes.
+        .listRowSeparator(.hidden)
+        // Dragged onto a folder in the sidebar, the note moves there.
+        .draggable(NoteReference(id: note.id))
+        .swipeActions(edge: .leading) {
+            if note.deletedAt != nil {
+                Button("Restore", systemImage: "arrow.uturn.backward") { perform { library.restore(note) } }
+            } else {
+                Button(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin") {
+                    perform { note.setPinned(!note.isPinned) }
+                }
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if note.deletedAt != nil {
+                Button("Delete Forever", systemImage: "trash", role: .destructive) { deleteForeverTarget = note }
+            } else {
+                Button("Delete", systemImage: "trash", role: .destructive) { trash(note) }
+            }
+        }
+        .contextMenu {
+            NoteActionsMenu(note: note, onNewTag: { tagTarget = note }, onExport: { exportTarget = note }, onDeleteForever: { deleteForeverTarget = note }, onError: { errorMessage = $0 })
+        }
     }
 
     // MARK: Empty states
@@ -253,51 +315,6 @@ private struct NoteResultsList: View {
         perform {
             library.trash(note)
         }
-    }
-}
-
-private struct NoteRow: View {
-    let note: Note
-    let query: String
-    let showsFolder: Bool
-
-    private var detail: String {
-        if let match = NoteSearch.snippet(in: note.body, query: query) { return match }
-        return note.snippet
-    }
-
-    var body: some View {
-        VStack(alignment: .leading) {
-            Label {
-                if note.title.isEmpty {
-                    Text("New note")
-                } else {
-                    Text(verbatim: note.title)
-                }
-            } icon: {
-                if note.isPinned {
-                    Image(systemName: "pin.fill")
-                        .accessibilityLabel("Pinned")
-                }
-            }
-
-            Text(verbatim: detail)
-                .foregroundStyle(.secondary)
-                .lineLimit(1, reservesSpace: true)
-
-            HStack {
-                Text(note.modifiedAt, format: .dateTime.month().day())
-                    .lineLimit(1, reservesSpace: true)
-                if showsFolder, let folder = note.folder {
-                    Text(verbatim: folder.name)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        // Let the list measure all three lines at their natural height on insertion.
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
     }
 }
 

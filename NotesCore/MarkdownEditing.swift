@@ -25,7 +25,7 @@ public struct TextEdit: Equatable, Sendable {
 public enum MarkdownCommand: CaseIterable, Sendable {
     case codeBlock, inlineCode, bold, italic, strikethrough, heading
     case bulletList, numberedList, checklist, quote, link
-    case table, formatTable
+    case table
 }
 
 /// Pure text logic for the formatting controls, so it can be tested without any UI.
@@ -48,7 +48,6 @@ public enum MarkdownEditing {
         case .quote: return toggleLines(.quote, in: source, selection: selection)
         case .link: return link(in: source, selection: selection)
         case .table: return table(in: source, selection: selection)
-        case .formatTable: return formatTable(in: source, selection: selection)
         }
     }
 
@@ -119,7 +118,7 @@ public enum MarkdownEditing {
 
     // MARK: Code block
 
-    /// Inserts a fenced block and leaves the caret right after the opening ``` so a language can be typed.
+    /// Inserts a fenced block with the caret at the start of its first body line.
     private static func codeBlock(in source: NSString, selection: NSRange) -> TextEdit {
         if selection.length > 0 {
             let lines = source.lineRange(for: selection)
@@ -129,7 +128,7 @@ public enum MarkdownEditing {
             return TextEdit(
                 range: lines,
                 replacement: "```\n" + content + "\n```" + (hadNewline ? "\n" : ""),
-                selection: NSRange(location: lines.location + 3, length: 0)
+                selection: NSRange(location: lines.location + 4, length: 0)
             )
         }
 
@@ -141,7 +140,7 @@ public enum MarkdownEditing {
             return TextEdit(
                 range: line,
                 replacement: "```\n\n```" + (hadNewline ? "\n" : ""),
-                selection: NSRange(location: line.location + 3, length: 0)
+                selection: NSRange(location: line.location + 4, length: 0)
             )
         }
 
@@ -150,8 +149,29 @@ public enum MarkdownEditing {
         return TextEdit(
             range: NSRange(location: lineEnd, length: 0),
             replacement: "\n```\n\n```",
-            selection: NSRange(location: lineEnd + 1 + 3, length: 0)
+            selection: NSRange(location: lineEnd + 1 + 4, length: 0)
         )
+    }
+
+    /// Sets the language of the fenced block that contains `offset`: the text after the opening fence. An empty language
+    /// removes it. Nil if `offset` is not in a fenced block. The fence characters are kept, because a closing fence has
+    /// to match them.
+    public static func setCodeLanguage(_ language: String, inBlockAt offset: Int, in text: String) -> TextEdit? {
+        let source = text as NSString
+        guard let block = CodeBlockScanner.scan(text).first(where: { NSLocationInRange(offset, $0.whole) || offset == NSMaxRange($0.whole) }) else { return nil }
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: block.open)
+        let opener = source.substring(with: NSRange(location: block.open.location, length: contentsEnd - block.open.location))
+        let leading = opener.prefix { $0 == " " || $0 == "\t" }
+        let rest = opener.dropFirst(leading.count)
+        let fence = rest.prefix { $0 == rest.first }
+        let name = language.trimmingCharacters(in: .whitespacesAndNewlines)
+        let line = String(leading) + String(fence) + name
+        let range = NSRange(location: block.open.location, length: contentsEnd - block.open.location)
+        let delta = (line as NSString).length - range.length
+        // The caret stays where it was, moved with the text that came before it.
+        let caret = offset > NSMaxRange(range) ? offset + delta : min(offset, range.location + (line as NSString).length)
+        return TextEdit(range: range, replacement: line, selection: NSRange(location: caret, length: 0))
     }
 
     // MARK: Heading
@@ -286,10 +306,6 @@ public enum MarkdownEditing {
         return offsets
     }
 
-    private static func cells(of line: String) -> [String] {
-        MarkdownTable.cells(of: line)
-    }
-
     /// A three-column table with a header and two empty rows, already lined up. The table always ends with a line break,
     /// so there is a line below it for the caret: the table is shown as a grid, and the caret cannot rest inside it.
     private static func table(in source: NSString, selection: NSRange) -> TextEdit {
@@ -320,61 +336,6 @@ public enum MarkdownEditing {
         // With a line break already after the line, it becomes the table's own, and the caret goes past it.
         let caret = lineEnd + (replacement as NSString).length + terminatorLength
         return TextEdit(range: NSRange(location: lineEnd, length: 0), replacement: replacement, selection: NSRange(location: caret, length: 0))
-    }
-
-    /// Lines up the columns of the table the caret is in, by padding every cell to the widest one in its column.
-    /// Returns an edit that changes nothing when the caret is not in a table.
-    private static func formatTable(in source: NSString, selection: NSRange) -> TextEdit {
-        let unchanged = TextEdit(range: NSRange(location: selection.location, length: 0), replacement: "", selection: selection)
-        guard source.length > 0 else { return unchanged }
-        var start = source.lineRange(for: NSRange(location: min(selection.location, source.length - 1), length: 0))
-        guard isTableRow(source.substring(with: start)) else { return unchanged }
-
-        // Grow to the whole run of table rows.
-        while start.location > 0 {
-            let previous = source.lineRange(for: NSRange(location: start.location - 1, length: 0))
-            guard isTableRow(source.substring(with: previous)) else { break }
-            start = NSUnionRange(start, previous)
-        }
-        var end = start
-        while NSMaxRange(end) < source.length {
-            let next = source.lineRange(for: NSRange(location: NSMaxRange(end), length: 0))
-            guard isTableRow(source.substring(with: next)) else { break }
-            end = NSUnionRange(end, next)
-        }
-
-        let block = source.substring(with: end)
-        let hadTrailingNewline = block.last?.isNewline == true
-        let lines = block.split(whereSeparator: \.isNewline).map(String.init)
-        let table = lines.map { cells(of: $0) }
-        let columns = table.map(\.count).max() ?? 0
-        guard columns > 0 else { return unchanged }
-
-        var widths = [Int](repeating: 3, count: columns)
-        for (index, line) in lines.enumerated() where !isTableSeparator(line) {
-            for (column, cell) in table[index].enumerated() { widths[column] = max(widths[column], cell.count) }
-        }
-
-        let formatted = lines.enumerated().map { index, line -> String in
-            let values = table[index]
-            if isTableSeparator(line) {
-                let marks = (0..<columns).map { column -> String in
-                    let cell = column < values.count ? values[column] : "---"
-                    let left = cell.hasPrefix(":"), right = cell.hasSuffix(":")
-                    let dashes = String(repeating: "-", count: max(1, widths[column] - (left ? 1 : 0) - (right ? 1 : 0)))
-                    return (left ? ":" : "") + dashes + (right ? ":" : "")
-                }
-                return "| " + marks.joined(separator: " | ") + " |"
-            }
-            let padded = (0..<columns).map { column -> String in
-                let cell = column < values.count ? values[column] : ""
-                return cell.padding(toLength: widths[column], withPad: " ", startingAt: 0)
-            }
-            return "| " + padded.joined(separator: " | ") + " |"
-        }.joined(separator: "\n") + (hadTrailingNewline ? "\n" : "")
-
-        let location = min(selection.location, end.location + (formatted as NSString).length)
-        return TextEdit(range: end, replacement: formatted, selection: NSRange(location: location, length: 0))
     }
 
     /// `[selection]()` with the caret between the parentheses, or `[]()` with the caret between the brackets.

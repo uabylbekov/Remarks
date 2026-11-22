@@ -6,6 +6,18 @@ struct MarkdownDocumentTests {
     private func kinds(_ text: String) -> [MarkdownDocument.Kind] { MarkdownDocument(text).blocks.map(\.kind) }
     private func substring(_ text: String, _ range: NSRange) -> String { (text as NSString).substring(with: range) }
 
+    @Test func anEmptyStrikethroughOrBoldOnItsOwnLineIsNotABlock() {
+        // What the Strikethrough and Bold commands write on an empty line, before anything is typed.
+        for text in ["~~~~", "****"] {
+            #expect(kinds(text) == [.paragraph], "\(text)")
+        }
+        // Real fences and rules are untouched.
+        #expect(kinds("~~~\ncode\n~~~").count == 1)
+        #expect(kinds("~~~~swift\ncode\n~~~~").count == 1)
+        #expect(kinds("~~~~~\ncode\n~~~~~").count == 1)
+        #expect(kinds("***") == [.rule])
+    }
+
     @Test func anEmptyNoteHasNoBlocks() {
         let document = MarkdownDocument("")
         #expect(document.blocks.isEmpty)
@@ -197,3 +209,4 @@ struct MarkdownDocumentUpdateTests {
         }
     }
 }
+

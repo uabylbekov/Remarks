@@ -22,8 +22,8 @@ struct HeadingElement: MarkdownElement {
         }
         paragraph.addAttribute(.paragraphStyle, value: headingStyle, range: full)
         if mark.length > 0 {
-            InlineStyler.hideOrDim(paragraph, range: mark, showsMarkdown: services.showsMarkdown)
-            if !services.showsMarkdown, marker.location == line.block.range.location {
+            InlineStyler.collapse(paragraph, range: mark)
+            if marker.location == line.block.range.location {
                 // A native metric anchor keeps an empty heading's baseline equal to a populated one.
                 let anchor = NSRange(location: mark.location, length: 1)
                 paragraph.replaceCharacters(in: anchor, with: "\u{FFFC}")
@@ -32,14 +32,14 @@ struct HeadingElement: MarkdownElement {
                     .attachment: AttachmentDrawing.placeholder(size: CGSize(width: 0.001, height: font.capHeight)),
                 ], range: anchor)
             }
-            if marker.location > line.block.range.location, !services.showsMarkdown {
+            if marker.location > line.block.range.location {
                 let style = NSMutableParagraphStyle()
                 style.minimumLineHeight = 0.01
                 style.maximumLineHeight = 0.01
                 paragraph.addAttribute(.paragraphStyle, value: style, range: full)
             }
         }
-        _ = InlineStyler.style(paragraph, hidesMarkers: !services.showsMarkdown, shrinksMarkers: true)
+        _ = InlineStyler.style(paragraph, hidesMarkers: true, shrinksMarkers: true)
         return true
     }
 

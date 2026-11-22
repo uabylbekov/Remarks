@@ -9,12 +9,12 @@ struct QuoteElement: MarkdownElement {
         let full = NSRange(location: 0, length: paragraph.length)
         let mark = NSRange(location: marker.location - line.range.location, length: marker.length)
 
-        paragraph.addAttribute(.foregroundColor, value: services.showsMarkdown ? EditorTheme.dimColor : EditorColor.clear, range: mark)
+        paragraph.addAttribute(.foregroundColor, value: EditorColor.clear, range: mark)
         InlineStyler.applyHangingIndent(paragraph, through: NSMaxRange(mark))
         let rest = NSRange(location: NSMaxRange(mark), length: max(0, full.length - NSMaxRange(mark)))
         paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: rest)
         paragraph.addAttribute(LivePreviewController.decorationKey, value: "quote", range: full)
-        _ = InlineStyler.style(paragraph, hidesMarkers: !services.showsMarkdown, shrinksMarkers: true)
+        _ = InlineStyler.style(paragraph, hidesMarkers: true, shrinksMarkers: true)
         return true
     }
 

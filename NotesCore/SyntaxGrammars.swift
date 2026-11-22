@@ -23,7 +23,7 @@ public enum SyntaxGrammars {
     private static let call = #"\b[a-z_][A-Za-z0-9_]*(?=\()"#
     private static let capitalized = #"\b[A-Z][A-Za-z0-9_]*\b"#
 
-    public static let all: [SyntaxGrammar] = [swift, python, javascript, json, bash, sql, rust, go, c]
+    public static let all: [SyntaxGrammar] = [swift, python, javascript, json, bash, sql, rust, go, c, html, css]
 
     /// Compiled engines keyed by every alias. Compiling the combined regex is the expensive part, so do it once.
     private static let enginesByAlias: [String: SyntaxEngine] = {
@@ -132,5 +132,37 @@ public enum SyntaxGrammars {
         rule(.constant, words("true false NULL nullptr")),
         rule(.function, call),
         rule(.type, capitalized),
+    ])
+
+    /// Markup has no state in a flat regex, so each part is found by what surrounds it: a tag name follows `<` or `</`, a
+    /// string is the value after `=`, an attribute is a name before `=`. Text content is left alone, and so is what is
+    /// inside `<script>` and `<style>`, which stay uncolored.
+    public static let html = SyntaxGrammar(name: "HTML", aliases: ["html", "htm", "xhtml", "xml", "svg"], ignoresCase: true, rules: [
+        rule(.comment, #"<!--[\s\S]*?-->"#),
+        rule(.attribute, #"<![A-Za-z]+[^>\n]*>"#),
+        rule(.string, #"(?<==)"[^"]*""#),
+        rule(.string, #"(?<==)'[^']*'"#),
+        rule(.keyword, #"(?<=<|</)[A-Za-z][\w:-]*"#),
+        rule(.attribute, #"[A-Za-z_:@][\w:.-]*(?=\s*=)"#),
+        rule(.constant, #"&(?:[A-Za-z]+|#\d+|#x[0-9A-Fa-f]+);"#),
+    ])
+
+    /// A declaration's property is the name before a `:` whose value ends in `;` or `}`, which is what tells it from a
+    /// pseudo-class such as `a:hover`. A selector is a name that comes before a `{` with no `;` or `}` in between.
+    public static let css = SyntaxGrammar(name: "CSS", aliases: ["css"], ignoresCase: true, rules: [
+        rule(.comment, #"/\*[\s\S]*?\*/"#),
+        rule(.string, doubleQuoted),
+        rule(.string, singleQuoted),
+        rule(.keyword, #"@[A-Za-z-]+"#),
+        rule(.keyword, #"!\s*important"#),
+        rule(.variable, #"--[A-Za-z0-9_-]+"#),
+        rule(.property, #"[A-Za-z-]+(?=\s*:\s*[^;{}]*[;}])"#),
+        rule(.number, #"#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b"#),
+        rule(.number, #"(?<![\w#.-])-?(?:\d+\.?\d*|\.\d+)(?:px|rem|em|vh|vw|vmin|vmax|ms|s|deg|fr|pt|cm|mm|in|%)?"#),
+        rule(.type, #"[.#][A-Za-z_-][\w-]*(?=[^{};]*\{)"#),
+        rule(.keyword, words("html body div span p a ul ol li h1 h2 h3 h4 h5 h6 img button input section header footer nav main table tr td th form label textarea select svg article aside figure video canvas code pre small strong em") + #"(?=[^{};]*\{)"#),
+        rule(.attribute, #"::?[A-Za-z-]+(?=[^{};]*\{)"#),
+        rule(.function, #"[A-Za-z-]+(?=\()"#),
+        rule(.constant, #"(?<![\w-])(?:none|auto|inherit|initial|unset|normal|bold|italic|solid|dashed|dotted|block|inline|flex|grid|absolute|relative|fixed|sticky|static|center|left|right|top|bottom|transparent|hidden|visible|nowrap|pointer)(?![\w-])"#),
     ])
 }

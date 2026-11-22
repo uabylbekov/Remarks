@@ -13,6 +13,19 @@ final class DecorationFragment: NSTextLayoutFragment {
         textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
     }
 
+    var quoteBarBounds: CGRect? {
+        guard kind == "quote",
+              let first = textLineFragments.first(where: { $0.characterRange.length > 0 }),
+              let last = textLineFragments.last(where: { $0.characterRange.length > 0 }),
+              let paragraph = (textElement as? NSTextParagraph)?.attributedString else { return nil }
+        let marker = (paragraph.string as NSString).range(of: ">").location
+        guard marker != NSNotFound else { return nil }
+        // The final paragraph can also own an empty caret line after its newline. It is not part of the quote.
+        return CGRect(x: first.locationForCharacter(at: marker).x,
+                      y: first.typographicBounds.minY - 2, width: 3,
+                      height: last.typographicBounds.maxY - first.typographicBounds.minY + 4)
+    }
+
     override var renderingSurfaceBounds: CGRect {
         super.renderingSurfaceBounds.union(
             CGRect(x: -layoutFragmentFrame.minX, y: 0, width: containerWidth, height: layoutFragmentFrame.height)
@@ -28,12 +41,10 @@ final class DecorationFragment: NSTextLayoutFragment {
 
         switch kind {
         case "quote":
+            guard let bounds = quoteBarBounds else { return }
             context.setFillColor(EditorColor.systemGray.withAlphaComponent(0.6).cgColor)
             // A little taller than the line, so the bars of neighboring quote lines meet.
-            let paragraph = (textElement as? NSTextParagraph)?.attributedString
-            let marker = (paragraph?.string as NSString?)?.range(of: ">").location ?? NSNotFound
-            let markerX = marker != NSNotFound ? textLineFragments.first?.locationForCharacter(at: marker).x ?? 0 : 0
-            let bar = CGRect(x: point.x + markerX, y: point.y - 2, width: 3, height: layoutFragmentFrame.height + 4)
+            let bar = bounds.offsetBy(dx: point.x, dy: point.y)
             context.addPath(CGPath(roundedRect: bar, cornerWidth: 1.5, cornerHeight: 1.5, transform: nil))
             context.fillPath()
         case "rule":

@@ -16,15 +16,6 @@ struct AppearanceSettingsView: View {
             }
 
             Section {
-                Picker("Background", selection: $model.settings.background) {
-                    Text("Plain").tag(BackgroundStyle.plain)
-                    Text("Paper").tag(BackgroundStyle.paper)
-                }
-            } footer: {
-                Text("Paper gives notes a warm background with a fine grain.")
-            }
-
-            Section {
                 FontChoiceRow(
                     title: "Font",
                     choice: $model.settings.textFont,
@@ -129,6 +120,7 @@ private struct AppearancePreview: View {
                 .font(Font(EditorTheme.proseFont as CTFont))
                 .lineSpacing(EditorTheme.bodyParagraphStyle.lineSpacing)
             Text(codeSample)
+                .lineSpacing(EditorTheme.codeLineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(Color(EditorTheme.codeBackground), in: .rect(cornerRadius: 8))

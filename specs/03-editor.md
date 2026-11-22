@@ -3,6 +3,9 @@
 Status: **Implemented in part (2026-11-19), written after the first build.** Milestone: M1 (core), M2 (code).
 Depends on: Spec 01, `spikes/01-editor-spike.md`, `spikes/02-highlighter-spike.md`, `00-platform-design.md`.
 
+Current ownership and regression requirements: [Editor implementation baseline](editor-architecture.md). This
+supersedes the historical keyboard-bar and source-mode presentation descriptions below.
+
 ## Decisions (already made)
 
 - TextKit 2 text view (`UITextView` / `NSTextView`) wrapped for SwiftUI.

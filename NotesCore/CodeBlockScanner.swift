@@ -43,7 +43,9 @@ public enum CodeBlockScanner {
                     ))
                     opener = nil
                 }
-            } else if ticks >= 3 {
+            } else if ticks >= 3, !(marker == "~" && trimmed == "~~~~") {
+                // `~~~~` alone is strikethrough switched on with nothing typed yet, which the Strikethrough command writes on
+                // an empty line. Longer tilde fences, and any fence with a language, still open a block.
                 let info = trimmed.dropFirst(ticks).trimmingCharacters(in: .whitespaces)
                 if marker == "`", info.contains("`") { location = NSMaxRange(line); continue }
                 let language = info.split(whereSeparator: \.isWhitespace).first.map { String($0).lowercased() } ?? ""

@@ -162,11 +162,6 @@ public enum FontChoice: Codable, Hashable, Sendable {
     case custom(postScriptName: String, family: String)
 }
 
-/// What the note sits on: the plain system background, or warm paper with a fine grain.
-public enum BackgroundStyle: String, Codable, CaseIterable, Sendable {
-    case plain, paper
-}
-
 public struct AppearanceSettings: Codable, Equatable, Sendable {
     public static let sizeScaleRange = 0.8...1.6
     public static let lineSpacingRange = 0.0...0.6
@@ -180,7 +175,6 @@ public struct AppearanceSettings: Codable, Equatable, Sendable {
     public var codeThemeID = CodeTheme.standard.id
     /// Lets the code font join characters such as `->` and `!=` into one symbol. Only Fira Code and JetBrains Mono do it.
     public var codeLigatures = true
-    public var background = BackgroundStyle.plain
 
     public init() {}
 
@@ -193,7 +187,6 @@ public struct AppearanceSettings: Codable, Equatable, Sendable {
         lineSpacing = try values.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? lineSpacing
         codeThemeID = try values.decodeIfPresent(String.self, forKey: .codeThemeID) ?? codeThemeID
         codeLigatures = try values.decodeIfPresent(Bool.self, forKey: .codeLigatures) ?? codeLigatures
-        background = (try? values.decodeIfPresent(BackgroundStyle.self, forKey: .background)) ?? background
     }
 
     /// Keeps stored values inside their allowed ranges, in case another device wrote something unexpected.

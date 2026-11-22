@@ -13,8 +13,6 @@ struct ElementLine {
 /// What the live preview offers an element while it styles a line.
 @MainActor
 protocol ElementServices: AnyObject {
-    /// Marks are shown (dimmed) instead of hidden.
-    var showsMarkdown: Bool { get }
     var attachmentProvider: ((UUID) -> AttachmentDisplay?)? { get }
     /// The width of the text container, and the padding inside it at each side of a line.
     var textContainerWidth: CGFloat { get }

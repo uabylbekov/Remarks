@@ -67,7 +67,18 @@ extension MarkdownEditing {
     /// - In a list item with text: starts the next item (a new checkbox is always unchecked, numbers count up).
     /// - In an empty list item: removes the mark and leaves a blank line, which ends the list.
     /// - Anywhere else, or with a selection, or with the caret inside the mark: nil.
+    ///   Inside bold, italic, strikethrough or inline code the line break keeps the marks paired (see `inlineReturnEdit`).
     public static func returnKeyEdit(in text: String, selection: NSRange) -> TextEdit? {
+        let list = listReturnEdit(in: text, selection: selection)
+        guard let list else { return inlineReturnEdit(in: text, selection: selection, next: "") }
+        // Only a list item that continues takes part: its edit is a line break inserted at the caret, and the rest is the
+        // next item's mark. Emptying an item changes the line itself, and stays as it was.
+        guard list.range.length == 0, list.range.location == selection.location, list.replacement.hasPrefix("\n"),
+              let split = inlineReturnEdit(in: text, selection: selection, next: String(list.replacement.dropFirst())) else { return list }
+        return split
+    }
+
+    private static func listReturnEdit(in text: String, selection: NSRange) -> TextEdit? {
         guard selection.length == 0 else { return nil }
         let source = text as NSString
         guard selection.location <= source.length else { return nil }

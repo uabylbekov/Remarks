@@ -23,13 +23,10 @@ struct CodeBlockElement: MarkdownElement {
         style.firstLineHeadIndent = LivePreviewController.codeInset
         style.headIndent = LivePreviewController.codeInset
         style.tailIndent = -LivePreviewController.codeInset
-        style.paragraphSpacingBefore = isOpen ? LivePreviewController.cardMargin + LivePreviewController.cardPadding : 0
-        style.paragraphSpacing = isOpen
-            ? LivePreviewController.fenceGap
-            : (isClose ? LivePreviewController.cardPadding + LivePreviewController.cardMargin : 0)
+        // Native fragment margins reserve card padding, including for the first paragraph in a document.
+        style.paragraphSpacing = isOpen ? LivePreviewController.fenceGap : 0
 
         paragraph.addAttribute(.font, value: EditorTheme.codeFont, range: full)
-        paragraph.addAttribute(.paragraphStyle, value: style, range: full)
         paragraph.addAttribute(LivePreviewController.blockMarkerKey, value: 1, range: full)
 
         if isFence {
@@ -37,11 +34,15 @@ struct CodeBlockElement: MarkdownElement {
             style.minimumLineHeight = ceil(small.ascender - small.descender + small.leading)
             paragraph.addAttributes([.font: small, .foregroundColor: EditorTheme.dimColor], range: full)
             let hidden = Self.hiddenMarker(in: paragraph.string as NSString, isOpen: isOpen, hasLanguage: !block.language.isEmpty)
-            InlineStyler.collapse(paragraph, range: hidden)
+            MarkdownDisplayProjection.hideMarkers(hidden, in: paragraph)
         } else {
+            // The fence lines stay compact, so the card's edges do not move with the setting.
+            style.lineSpacing = EditorTheme.codeLineSpacing
             paragraph.addAttribute(.foregroundColor, value: EditorTheme.codeTextColor, range: full)
-            applySyntaxColors(to: paragraph, range: line.range, tokens: services.syntaxTokens(for: block))
+            Self.applySyntaxColors(to: paragraph, range: line.range, tokens: services.syntaxTokens(for: block))
         }
+        // Attributed strings retain paragraph styles; finish configuring it before publishing an immutable copy.
+        paragraph.addAttribute(.paragraphStyle, value: style.copy(), range: full)
         return true
     }
 
@@ -62,7 +63,7 @@ struct CodeBlockElement: MarkdownElement {
     }
 
     /// Colors come from the display layer, so the stored text is never touched and typing never triggers a rewrite.
-    private func applySyntaxColors(to paragraph: NSMutableAttributedString, range: NSRange, tokens: [SyntaxToken]) {
+    static func applySyntaxColors(to paragraph: NSMutableAttributedString, range: NSRange, tokens: [SyntaxToken]) {
         // Tokens are sorted by position, so find the first one that can reach this line and stop at the first past it.
         var low = 0, high = tokens.count
         while low < high {
@@ -87,69 +88,74 @@ struct CodeBlockElement: MarkdownElement {
 /// Draws the rounded background behind code block lines.
 ///
 /// Where a line sits in its block (first row, last row) is asked of the controller at draw time instead of being stored
-/// in the text, so it can never go stale when lines are added or removed, and it never affects layout.
+/// in the text. Native fragment margins reserve the same space used by its background and caret.
 final class CodeBlockFragment: NSTextLayoutFragment {
     private static let cornerRadius: CGFloat = 10
-    /// Neighboring lines overlap by this much, so no hairline seam shows between them at fractional pixel positions.
-    private static let overlap: CGFloat = 0.75
-
     weak var controller: LivePreviewController?
 
-    private var containerWidth: CGFloat {
-        textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+    private var row: LivePreviewController.BlockRow {
+        controller?.blockRow(for: textElement) ?? .init(isFirst: true, isLast: true, isUnclosed: false)
     }
 
-    /// The card's top and bottom edges for this line, relative to the top of the fragment.
-    private func verticalExtent(of row: LivePreviewController.BlockRow) -> (top: CGFloat, bottom: CGFloat) {
+    /// TextKit reserves these margins before computing line and caret geometry.
+    /// Paragraph spacing alone is insufficient: the first paragraph can omit spacing before it.
+    override var topMargin: CGFloat {
+        row.isFirst ? LivePreviewController.cardMargin + LivePreviewController.cardPadding : 0
+    }
+
+    override var bottomMargin: CGFloat {
+        row.isLast ? LivePreviewController.cardMargin + LivePreviewController.cardPadding : 0
+    }
+
+    /// Background geometry comes from the same native fragment that lays out text and the insertion point.
+    var cardBounds: CGRect {
+        let frame = layoutFragmentFrame
         let top = row.isFirst ? LivePreviewController.cardMargin : 0
-        guard row.isLast else { return (top, layoutFragmentFrame.height) }
-
-        // The text engine lays the empty line after a trailing newline out inside this fragment. It belongs to the
-        // card only when the block is still open, because that is the next line of code. After a closing fence it is
-        // an ordinary line below the card.
-        let lines = textLineFragments
-        let realLines = lines.filter { $0.characterRange.length > 0 }
-        let reference = (row.isUnclosed ? lines.last : realLines.last)
-        let lastBottom = reference.map { $0.typographicBounds.maxY } ?? layoutFragmentFrame.height
-        return (top, lastBottom + LivePreviewController.cardPadding)
+        // A closed final paragraph can contain TextKit’s extra line for the next prose insertion point.
+        // It belongs outside the card; use the native real-line bounds instead of painting over it.
+        let bottom: CGFloat
+        if row.isLast, !row.isUnclosed, let last = textLineFragments.last(where: { $0.characterRange.length > 0 }) {
+            bottom = last.typographicBounds.maxY
+        } else {
+            bottom = frame.height - (row.isLast ? LivePreviewController.cardMargin : 0)
+        }
+        return CGRect(
+            x: -frame.minX,
+            y: top,
+            width: textLayoutManager?.textContainer?.size.width ?? frame.width,
+            height: max(0, bottom - top)
+        )
     }
 
-    // The background is wider than the text and can extend past it, so the rendering surface must include it.
+    /// The opening row is both the label's drawing area and its tap target.
+    var languageBounds: CGRect? {
+        guard row.isFirst, let line = textLineFragments.first else { return nil }
+        return CGRect(x: cardBounds.minX, y: line.typographicBounds.minY,
+                      width: cardBounds.width, height: line.typographicBounds.height)
+    }
+
     override var renderingSurfaceBounds: CGRect {
-        let row = controller?.blockRow(for: textElement) ?? .init(isFirst: true, isLast: true, isUnclosed: false)
-        let extent = verticalExtent(of: row)
-        // The fragment's frame starts at the text's indent, but the background starts at the container edge.
-        return super.renderingSurfaceBounds.union(
-            CGRect(
-                x: -layoutFragmentFrame.minX,
-                y: min(0, extent.top) - Self.overlap,
-                width: containerWidth,
-                height: max(layoutFragmentFrame.height, extent.bottom) + 2 * Self.overlap
-            )
-        )
+        super.renderingSurfaceBounds.union(cardBounds)
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
-        let row = controller?.blockRow(for: textElement) ?? .init(isFirst: true, isLast: true, isUnclosed: false)
-        let extent = verticalExtent(of: row)
-        let top = row.isFirst ? Self.cornerRadius : 0
-        let bottom = row.isLast ? Self.cornerRadius : 0
-        // Square edges that meet another line reach a little into it.
-        let extendUp = top > 0 ? 0 : Self.overlap
-        let extendDown = bottom > 0 ? 0 : Self.overlap
-        let rect = CGRect(
-            x: point.x - layoutFragmentFrame.minX,
-            y: point.y + extent.top - extendUp,
-            width: containerWidth,
-            height: extent.bottom - extent.top + extendUp + extendDown
-        )
-
+        let bounds = cardBounds.offsetBy(dx: point.x, dy: point.y)
+        let top = row.isFirst ? min(Self.cornerRadius, bounds.height / 2) : 0
+        let bottom = row.isLast ? min(Self.cornerRadius, bounds.height / 2) : 0
         context.saveGState()
         context.setFillColor(EditorTheme.codeBackground.cgColor)
-        context.addPath(Self.path(for: rect, topRadius: top, bottomRadius: bottom))
+        context.addPath(Self.path(for: bounds, topRadius: top, bottomRadius: bottom))
         context.fillPath()
         context.restoreGState()
         super.draw(at: point, in: context)
+        if let rect = languageBounds,
+           controller?.codeLanguage(for: textElement)?.isEmpty == true {
+            let font = EditorFont.monospacedSystemFont(ofSize: EditorTheme.codeFont.pointSize * 0.8, weight: .regular)
+            let hint = NSAttributedString(string: String(localized: "Language") + " ▾",
+                                          attributes: [.font: font, .foregroundColor: EditorTheme.dimColor])
+            hint.draw(at: CGPoint(x: point.x + LivePreviewController.codeInset,
+                                  y: point.y + rect.minY))
+        }
     }
 
     /// A rectangle with independent top and bottom corner radii. Y grows downward in both UIKit and AppKit text views.

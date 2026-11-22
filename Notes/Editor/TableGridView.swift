@@ -27,6 +27,8 @@ struct TableGridView: View {
     let onDelete: () -> Void
     /// The caret left the table with an arrow key, Tab, or Return, past its first or last cell.
     let onExit: (TableExit) -> Void
+    /// Focused cell bounds in the hosting view, for the native editor’s vertical scrolling.
+    var onFocusBounds: ((CGRect?) -> Void)? = nil
 
     private struct CellID: Hashable {
         /// -1 is the header row.
@@ -87,11 +89,13 @@ struct TableGridView: View {
                 .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
                 .clipShape(.rect(cornerRadius: 8))
         }
+        .coordinateSpace(name: "markdownTable")
         .scrollIndicators(.automatic)
         .frame(height: Self.height(for: table), alignment: .top)
         .onChange(of: focus) { old, new in
             if let old { drafts.removeValue(forKey: old) }
             if let new { lastFocus = new }
+            else { onFocusBounds?(nil) }
         }
         .onChange(of: table) { _, _ in
             // Keep local spacing during typing, but let undo and external changes replace stale drafts.
@@ -186,6 +190,7 @@ struct TableGridView: View {
                 Rectangle().fill(.separator).frame(width: 1)
             }
         }
+        .modifier(FocusedTableCellBounds(isFocused: isFocused) { onFocusBounds?($0) })
         .contentShape(.rect)
         .onTapGesture { focus = id }
         .overlay(alignment: .trailing) {
@@ -302,6 +307,26 @@ struct TableGridView: View {
         var changed = table
         change(&changed)
         if changed != table { onChange(changed) }
+    }
+}
+
+/// Measuring in the host’s local space avoids feeding the parent’s scrolling back into focus updates.
+private struct FocusedTableCellBounds: ViewModifier {
+    let isFocused: Bool
+    let report: (CGRect) -> Void
+    @State private var bounds: CGRect = .zero
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named("markdownTable"))
+            } action: { value in
+                bounds = value
+                if isFocused { report(value) }
+            }
+            .onChange(of: isFocused) { _, focused in
+                if focused, !bounds.isEmpty { report(bounds) }
+            }
     }
 }
 

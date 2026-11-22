@@ -44,7 +44,7 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 4.1 | Type a fenced code block on the iPhone (use the ``` button on the keyboard bar) | A card appears with a language label when you tap outside it |
 | 4.2 | Tap into the code block, then out again | The card does not change size and nothing below it moves |
 | 4.3 | Put blank lines inside a code block | No thin lines between the code lines |
-| 4.4 | Look at the keyboard bar | A floating rounded bar of Liquid Glass above the keyboard; every button works |
+| 4.4 | Look at the keyboard bar | Native formatting and attachment menus, checklist/table buttons, and keyboard dismissal work; the top toolbar also exposes formatting and attachments with the keyboard hidden |
 | 4.5 | Type `- [ ]` and Return | A new checkbox line; tapping a box toggles it |
 | 4.6 | Select text and press ⌘B, ⌘I (Mac) | Bold and italic wrap the selection |
 
@@ -93,9 +93,8 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 8.1 | Mac: look at the editor toolbar | Heading, Bold, Italic, Checklist, **Table**, **Attach** (paperclip), the two lists, and a **More** menu. Narrow the window: the last buttons fold into the » menu first |
 | 8.2 | iPhone: look at the keyboard bar | Heading, Checklist, **Table**, **paperclip** come first, then the other buttons |
 | 8.3 | Tap **Table** | A 3 by 3 table is inserted with "Column 1" selected, drawn as a card with a bold header |
-| 8.4 | Type in the cells, then use **Format** > **Format Table** (Mac) or the **More** menu | The columns line up again |
-| 8.5 | Add a photo or file, and the caret ends on the line after it | The attachment shows as a picture or chip, not as raw text |
-| 8.6 | A wide table on an iPhone | The row is cut at the edge (it does not scroll sideways yet) |
+| 8.4 | Add a photo or file, and the caret ends on the line after it | The attachment shows as a picture or chip, not as raw text |
+| 8.5 | A wide table on an iPhone | The row is cut at the edge (it does not scroll sideways yet) |
 
 ## 9. Spotlight (Spec 06)
 

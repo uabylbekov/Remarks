@@ -26,6 +26,7 @@ final class EditorSession: NSObject {
 
     private(set) var note: Note
     let commands: EditorCommands?
+    private let rendersMarkdown: Bool
     private var host: Host?
     private(set) var preview: LivePreviewController?
     private(set) lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
@@ -41,16 +42,17 @@ final class EditorSession: NSObject {
     var onSaveError: ((String) -> Void)?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    init(note: Note, commands: EditorCommands?) {
+    init(note: Note, commands: EditorCommands?, rendersMarkdown: Bool = true) {
         self.note = note
         self.commands = commands
+        self.rendersMarkdown = rendersMarkdown
         super.init()
     }
 
     /// Connects the text view and shows the note. Call last, after the platform has set the view up.
     func attach(host: Host, textLayoutManager: NSTextLayoutManager?) {
         self.host = host
-        if let layoutManager = textLayoutManager,
+        if rendersMarkdown, let layoutManager = textLayoutManager,
            let contentStorage = layoutManager.textContentManager as? NSTextContentStorage {
             preview = LivePreviewController(contentStorage: contentStorage, layoutManager: layoutManager)
             preview?.attachmentProvider = { [weak self] in self?.catalog.display(for: $0) }
@@ -112,18 +114,6 @@ final class EditorSession: NSObject {
         host.applyFont()
         host.applyBodyStyle()
         preview?.reload()
-    }
-
-    /// Switches between hiding the Markdown marks and showing them.
-    @discardableResult
-    func setShowsMarkdown(_ value: Bool) -> Bool {
-        guard let preview, let host, !host.isComposing(), preview.showsMarkdown != value else { return false }
-        preview.showsMarkdown = value
-        if !value {
-            let selection = preview.selectionForPreview(host.selection())
-            apply(TextEdit(range: NSRange(location: host.selection().location, length: 0), replacement: "", selection: selection))
-        }
-        return true
     }
 
     /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.

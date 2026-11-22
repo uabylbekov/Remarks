@@ -8,8 +8,8 @@ struct ContentView: View {
     @State private var scope: NoteScope? = .all
     @State private var selectedNoteID: UUID?
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var errorMessage: String?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @Environment(\.modelContext) private var context
     @State private var asksNewFolder = false
     @State private var newFolderName = ""
@@ -34,11 +34,23 @@ struct ContentView: View {
                     NoteDetailView(id: selectedNoteID)
                 } else {
                     ContentUnavailableView("Select a Note", systemImage: "note.text")
+                        #if os(macOS)
+                        // The editor's toolbar stays, switched off, so the window does not change shape between notes.
+                        .toolbar {
+                            FormattingToolbarContent(commands: EditorCommands(), isEnabled: false)
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("Note", systemImage: "ellipsis.circle") {}.disabled(true)
+                            }
+                        }
+                        #endif
                 }
             }
             // Without a minimum, the other columns take their widest size and squeeze the editor.
             .navigationSplitViewColumnWidth(min: 380, ideal: 560)
         }
+        #if os(macOS)
+        .keepsSidebarThroughFullScreen($columnVisibility)
+        #endif
         // The File menu's New Folder works even while the sidebar, and its toolbar button, is hidden.
         .focusedSceneValue(\.newFolder, $asksNewFolder)
         .onChange(of: asksNewFolder) { if asksNewFolder { newFolderName = "" } }
@@ -91,3 +103,40 @@ extension FocusedValues {
     /// Set to true to ask for a new top-level folder. Provided by the main window, used by the File menu.
     @Entry var newFolder: Binding<Bool>?
 }
+
+#if os(macOS)
+import AppKit
+
+private extension View {
+    /// Entering or leaving full screen resizes the window through sizes of its own, and the system opens or closes the
+    /// sidebar to suit them. Whatever the person chose stays: the visibility is noted before the change and put back after.
+    func keepsSidebarThroughFullScreen(_ visibility: Binding<NavigationSplitViewVisibility>) -> some View {
+        modifier(KeepsSidebarThroughFullScreen(visibility: visibility))
+    }
+}
+
+private struct KeepsSidebarThroughFullScreen: ViewModifier {
+    @Binding var visibility: NavigationSplitViewVisibility
+    @State private var chosen: NavigationSplitViewVisibility?
+
+    func body(content: Content) -> some View {
+        content.task {
+            await withTaskGroup(of: Void.self) { group in
+                for name in [NSWindow.willEnterFullScreenNotification, NSWindow.willExitFullScreenNotification] {
+                    group.addTask { @MainActor in
+                        for await _ in NotificationCenter.default.notifications(named: name) { chosen = visibility }
+                    }
+                }
+                for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+                    group.addTask { @MainActor in
+                        for await _ in NotificationCenter.default.notifications(named: name) {
+                            if let chosen { visibility = chosen }
+                            chosen = nil
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#endif

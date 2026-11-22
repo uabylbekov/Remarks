@@ -7,21 +7,20 @@ import UIKit
 
 /// One title and symbol per formatting command, shared by the Mac toolbar and the iPhone keyboard bar.
 extension MarkdownCommand {
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
-        case .heading: "Heading"
-        case .bold: "Bold"
-        case .italic: "Italic"
-        case .strikethrough: "Strikethrough"
-        case .checklist: "Checklist"
-        case .table: "Table"
-        case .formatTable: "Format Table"
-        case .bulletList: "Bulleted List"
-        case .numberedList: "Numbered List"
-        case .quote: "Quote"
-        case .inlineCode: "Inline Code"
-        case .codeBlock: "Code Block"
-        case .link: "Link"
+        case .heading: String(localized: "Heading")
+        case .bold: String(localized: "Bold")
+        case .italic: String(localized: "Italic")
+        case .strikethrough: String(localized: "Strikethrough")
+        case .checklist: String(localized: "Checklist")
+        case .table: String(localized: "Table")
+        case .bulletList: String(localized: "Bulleted List")
+        case .numberedList: String(localized: "Numbered List")
+        case .quote: String(localized: "Quote")
+        case .inlineCode: String(localized: "Inline Code")
+        case .codeBlock: String(localized: "Code Block")
+        case .link: String(localized: "Link")
         }
     }
 
@@ -33,7 +32,6 @@ extension MarkdownCommand {
         case .strikethrough: "strikethrough"
         case .checklist: "checklist"
         case .table: "tablecells"
-        case .formatTable: "tablecells.badge.ellipsis"
         case .bulletList: "list.bullet"
         case .numberedList: "list.number"
         case .quote: "text.quote"
@@ -41,6 +39,45 @@ extension MarkdownCommand {
         case .codeBlock: "curlybraces"
         case .link: "link"
         }
+    }
+}
+
+/// One command catalog for every surface that offers formatting. Add commands here so one surface cannot silently lose an
+/// editing capability.
+enum EditorCommandCatalog {
+    /// Every command, in the order the keyboard bar shows them: the most used first, because the last ones are scrolled
+    /// out of sight.
+    static let keyboardBar: [MarkdownCommand] = [
+        .heading, .bold, .italic, .checklist, .bulletList, .numberedList, .quote, .table,
+        .codeBlock, .inlineCode, .link, .strikethrough,
+    ]
+}
+
+extension AttachmentSource {
+    var title: String {
+        switch self {
+        case .photoLibrary: String(localized: "Photo Library…")
+        case .camera: String(localized: "Take Photo")
+        case .file: String(localized: "Choose File…")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .photoLibrary: "photo.on.rectangle"
+        case .camera: "camera"
+        case .file: "doc"
+        }
+    }
+
+    /// The places this device can add an attachment from. The camera is offered only where there is one.
+    static var available: [AttachmentSource] {
+        #if os(iOS)
+        let hasCamera = UIImagePickerController.isSourceTypeAvailable(.camera)
+        #else
+        let hasCamera = false
+        #endif
+        return [.photoLibrary] + (hasCamera ? [.camera] : []) + [.file]
     }
 }
 
@@ -63,21 +100,11 @@ struct CommandButton: View {
 struct AttachMenu: View {
     let attach: (AttachmentSource) -> Void
 
-    private var hasCamera: Bool {
-        #if os(iOS)
-        UIImagePickerController.isSourceTypeAvailable(.camera)
-        #else
-        false
-        #endif
-    }
-
     var body: some View {
         Menu("Attach", systemImage: "paperclip") {
-            Button("Photo Library…", systemImage: "photo.on.rectangle") { attach(.photoLibrary) }
-            if hasCamera {
-                Button("Take Photo", systemImage: "camera") { attach(.camera) }
+            ForEach(AttachmentSource.available, id: \.self) { source in
+                Button(source.title, systemImage: source.systemImage) { attach(source) }
             }
-            Button("Choose File…", systemImage: "doc") { attach(.file) }
         }
     }
 }
@@ -86,74 +113,84 @@ struct AttachMenu: View {
 /// The Mac has no keyboard bar, so the formatting commands live in the window toolbar.
 struct FormattingToolbarContent: ToolbarContent {
     let commands: EditorCommands
+    /// Off while no note is open, so the toolbar is there but does nothing, as in Apple Notes.
+    var isEnabled = true
 
     var body: some ToolbarContent {
         // The most used first: the system folds the last buttons into the » menu when the window is narrow.
         ToolbarItemGroup(placement: .secondaryAction) {
-            CommandButton(.heading, perform: commands.perform)
-            CommandButton(.bold, perform: commands.perform)
-            CommandButton(.italic, perform: commands.perform)
-            CommandButton(.checklist, perform: commands.perform)
-            CommandButton(.table, perform: commands.perform)
-            AttachMenu(attach: commands.attach)
-            CommandButton(.bulletList, perform: commands.perform)
-            CommandButton(.numberedList, perform: commands.perform)
-            Menu("More", systemImage: "ellipsis") {
-                CommandButton(.strikethrough, perform: commands.perform)
-                CommandButton(.quote, perform: commands.perform)
-                CommandButton(.inlineCode, perform: commands.perform)
-                CommandButton(.codeBlock, perform: commands.perform)
-                CommandButton(.link, perform: commands.perform)
-                CommandButton(.formatTable, perform: commands.perform)
+            Group {
+                CommandButton(.heading, perform: commands.perform)
+                CommandButton(.bold, perform: commands.perform)
+                CommandButton(.italic, perform: commands.perform)
+                CommandButton(.checklist, perform: commands.perform)
+                CommandButton(.table, perform: commands.perform)
+                AttachMenu(attach: commands.attach)
+                CommandButton(.bulletList, perform: commands.perform)
+                CommandButton(.numberedList, perform: commands.perform)
+                Menu("More", systemImage: "ellipsis") {
+                    CommandButton(.strikethrough, perform: commands.perform)
+                    CommandButton(.quote, perform: commands.perform)
+                    CommandButton(.inlineCode, perform: commands.perform)
+                    CommandButton(.codeBlock, perform: commands.perform)
+                    CommandButton(.link, perform: commands.perform)
+                }
             }
+            .disabled(!isEnabled)
         }
     }
 }
 #endif
 
 #if os(iOS)
-/// The row of Markdown controls above the iPhone keyboard. Scrolls sideways when it does not fit.
-/// Typing ``` or # on a phone keyboard takes several taps, so these are one tap each.
+private extension View {
+    /// A square the size of the smallest comfortable tap, as the Human Interface Guidelines ask.
+    func touchTarget() -> some View {
+        frame(width: 44, height: 44).contentShape(.rect)
+    }
+}
+
+/// The bar above the keyboard: every command in a scrolling glass capsule, attachments after the lists and tables, and
+/// a separate Hide Keyboard button. It floats with a gap above the keyboard, like the system's own bars.
 struct KeyboardFormattingBar: View {
+    let commands: EditorCommands?
     let perform: (MarkdownCommand) -> Void
     let attach: (AttachmentSource) -> Void
     let dismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollView(.horizontal) {
-                // The most used first, because the last ones are off screen.
-                HStack(spacing: 2) {
-                    CommandButton(.heading, perform: perform)
-                    CommandButton(.checklist, perform: perform)
-                    CommandButton(.table, perform: perform)
-                    AttachMenu(attach: attach)
-                    CommandButton(.bold, perform: perform)
-                    CommandButton(.italic, perform: perform)
-                    CommandButton(.strikethrough, perform: perform)
-                    CommandButton(.bulletList, perform: perform)
-                    CommandButton(.numberedList, perform: perform)
-                    CommandButton(.quote, perform: perform)
-                    Button { perform(.codeBlock) } label: {
-                        Text(verbatim: "```").font(.body.monospaced().weight(.semibold))
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(EditorCommandCatalog.keyboardBar, id: \.self) { command in
+                            CommandButton(command, perform: perform)
+                                .touchTarget()
+                            if command == .table {
+                                AttachMenu(attach: attach)
+                                    .touchTarget()
+                            }
+                        }
                     }
-                    .accessibilityLabel(Text(MarkdownCommand.codeBlock.title))
-                    CommandButton(.inlineCode, perform: perform)
-                    CommandButton(.link, perform: perform)
+                    .padding(.horizontal, 6)
                 }
-                .padding(.horizontal, 6)
-            }
-            .scrollIndicators(.hidden)
+                .scrollIndicators(.hidden)
+                .glassEffect(.regular, in: .capsule)
 
-            Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down", action: dismiss)
-                .padding(.trailing, 4)
+                Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down", action: dismiss)
+                    .touchTarget()
+                    .glassEffect(.regular.interactive(), in: .circle)
+            }
         }
         .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .menuStyle(.borderlessButton)
-        .controlSize(.large)
-        .frame(height: 48)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .buttonStyle(.plain)
+        .menuStyle(.button)
+        .font(.title3)
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
+        // While a table cell owns input, a command would reach the document, not the cell.
+        .disabled(commands?.isEditingTableCell == true)
     }
 }
 #endif

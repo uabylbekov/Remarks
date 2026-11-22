@@ -46,7 +46,7 @@ import NotesCore
                     .environment(monitor)
             case .failure(let error):
                 ContentUnavailableView(
-                    "Notes could not open its data",
+                    "Remarks could not open its data",
                     systemImage: "exclamationmark.triangle",
                     description: Text(error.localizedDescription)
                 )
@@ -80,7 +80,7 @@ private struct LibraryMaintenance: ViewModifier {
             // local state. Without iCloud no import comes, so it also runs 60 seconds after launch. Later imports
             // only merge duplicates, because a purge reads every note and snapshot.
             var didPurge = false
-            func purgeOnce() {
+            let purgeOnce: @MainActor @Sendable () -> Void = {
                 tidy(purging: !didPurge)
                 didPurge = true
             }
@@ -179,12 +179,8 @@ private struct FormatCommands: Commands {
             Button("Numbered List") { editor?.perform(.numberedList) }
             Button("Checklist") { editor?.perform(.checklist) }
             Button("Table") { editor?.perform(.table) }
-            Button("Format Table") { editor?.perform(.formatTable) }
             Button("Quote") { editor?.perform(.quote) }
             Button("Code Block") { editor?.perform(.codeBlock) }.keyboardShortcut("c", modifiers: [.command, .option])
-            Divider()
-            Toggle("Show Markdown", isOn: Binding(get: { editor?.showsMarkdown ?? false }, set: { editor?.showsMarkdown = $0 }))
-                .disabled(editor == nil)
         }
     }
 }

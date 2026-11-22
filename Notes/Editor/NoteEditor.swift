@@ -6,40 +6,52 @@ import NotesCore
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
 
-/// Lets a toolbar outside the editor run formatting commands in it, and lets the editor ask the screen around it for
-/// things only SwiftUI can show (a picker for an attachment). The Mac editor connects itself when it appears.
+/// What the language menu shows and does for the code card under the finger.
 @MainActor
 @Observable
-final class EditorCommands {
-    // Plain hooks the editor sets for itself. Nothing watches them.
-    @ObservationIgnored var handler: ((MarkdownCommand) -> Void)?
-    /// Puts Markdown on its own line at the caret. Used to insert an attachment.
-    @ObservationIgnored var insert: ((String) -> Void)?
+private final class LanguageMenuModel {
+    /// The language written on the card's fence, lowercased. Empty for none.
+    var current = ""
+    var onChoose: (String) -> Void = { _ in }
+}
 
-    // State the screen around the editor watches (`AttachmentPickers`), instead of closures it has to install.
-    /// Set when the user asks to add an attachment from a source. The screen shows the picker and clears it.
-    var attachmentRequest: AttachmentSource?
-    /// Whether the Markdown marks (`#`, `**`, link addresses) are shown. Off, they are hidden once they take effect.
-    var showsMarkdown = UserDefaults.standard.bool(forKey: "showsMarkdown") {
-        didSet { UserDefaults.standard.set(showsMarkdown, forKey: "showsMarkdown") }
+/// The language chooser: a menu with the current language checked. It is laid over a card's language label and has no
+/// look of its own, so the label drawn by the text layout is what shows, and the menu opens from it.
+private struct LanguageMenu: View {
+    let model: LanguageMenuModel
+
+    var body: some View {
+        let selection = Binding(get: { model.current }, set: { model.onChoose($0) })
+        let isListed = model.current.isEmpty || CodeLanguages.all.contains { $0.id == model.current }
+        Menu {
+            Picker("Language", selection: selection) {
+                Text("Plain Text").tag("")
+                ForEach(CodeLanguages.all) { language in
+                    Text(verbatim: language.name).tag(language.id)
+                }
+                // A language the editor does not color still shows, checked, as written.
+                if !isListed { Text(verbatim: model.current).tag(model.current) }
+            }
+        } label: {
+            Color.clear.contentShape(.rect)
+        }
     }
-    /// Pictures and files pasted into the editor. The screen turns them into attachments and clears the list.
-    var pastedFiles: [PastedFile] = []
-
-    func perform(_ command: MarkdownCommand) { handler?(command) }
-    func pasted(_ files: [PastedFile]) { pastedFiles += files }
-    func insertBlock(_ markdown: String) { insert?(markdown) }
-    func attach(from source: AttachmentSource) { attachmentRequest = source }
 }
+#elseif canImport(AppKit)
+import AppKit
 
-extension FocusedValues {
-    /// The formatting commands of the editor that has focus, for the menu bar.
-    @Entry var editorCommands: EditorCommands?
+@MainActor
+private final class CodeLanguageMenuTarget: NSObject {
+    let selection: (String) -> Void
+
+    init(selection: @escaping (String) -> Void) { self.selection = selection }
+
+    @objc func choose(_ item: NSMenuItem) {
+        if let language = item.representedObject as? String { selection(language) }
+    }
 }
+#endif
 
 /// The note editor: a TextKit 2 text view with live Markdown preview (Spec 03).
 /// The stored text is always the real Markdown. Model updates are immediate; disk saves are debounced
@@ -54,31 +66,20 @@ struct NoteEditor: View {
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
     var onSaveError: ((String) -> Void)?
-    @State private var saveError: String?
+    /// Used by isolated container fixtures; production notes use Markdown presentation.
+    var rendersMarkdown = true
 
     var body: some View {
         // Reading the revision here makes SwiftUI update the text view whenever an appearance setting changes.
         NoteTextView(
             note: note,
             appearanceRevision: AppearanceModel.shared.revision,
-            onSaveError: { message in
-                // Dismantling an editor can flush a save while SwiftUI is updating views.
-                Task { @MainActor in
-                    if let onSaveError { onSaveError(message) } else { saveError = message }
-                }
-            },
+            rendersMarkdown: rendersMarkdown,
+            onSaveError: onSaveError ?? { _ in },
             initialSelection: initialSelection,
             commands: commands,
             onOpenAttachment: onOpenAttachment
         )
-        #if os(iOS)
-        // Let the text view run under the bars; UITextView insets its own content by the safe area, so text scrolls
-        // beneath them instead of being clipped at their edges.
-        .ignoresSafeArea(.container, edges: [.top, .bottom])
-        #endif
-        .alert("Unable to Save Note", item: $saveError) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { Text(verbatim: $0) }
     }
 }
 
@@ -98,14 +99,43 @@ private final class MarkdownUITextView: UITextView {
     /// UIKit sends nothing to the delegate for Backspace at the very start of the text, so the editor gets it here.
     /// Returns true when it handled the key.
     var onBackspaceAtStart: (() -> Bool)?
+    var onMoveDown: (() -> Bool)?
+    /// The language menu to receive a touch at a point, if the point is on a code card's language label.
+    var languageMenuAt: ((CGPoint) -> UIView?)?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // The menu's own button, not its container, has to receive the touch, so ask the container for it.
+        if let menu = languageMenuAt?(point) { return menu.hitTest(convert(point, to: menu), with: event) ?? menu }
+        return super.hitTest(point, with: event)
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.count == 1, let key = presses.first?.key,
+           key.keyCode == .keyboardDownArrow,
+           key.modifierFlags.intersection([.shift, .control, .alternate, .command]).isEmpty,
+           markedTextRange == nil, onMoveDown?() == true { return }
+        super.pressesBegan(presses, with: event)
+    }
 
     private var previousViewportSize: CGSize = .zero
+    private var needsCaretReveal = false
+
+    func scheduleCaretReveal() {
+        needsCaretReveal = true
+        setNeedsLayout()
+    }
+
+    override func adjustedContentInsetDidChange() {
+        super.adjustedContentInsetDidChange()
+        scheduleCaretReveal()
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         onLayout?()
-        if bounds.size != previousViewportSize {
+        if bounds.size != previousViewportSize || needsCaretReveal {
             previousViewportSize = bounds.size
+            needsCaretReveal = false
             revealCaret()
         }
     }
@@ -192,24 +222,28 @@ private final class MarkdownUITextView: UITextView {
     }
 }
 
-private struct NoteTextView: UIViewRepresentable {
+private struct NoteTextView: UIViewControllerRepresentable {
     let note: Note
     let appearanceRevision: Int
+    let rendersMarkdown: Bool
     @Environment(\.openURL) private var openURL
     let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands, rendersMarkdown: rendersMarkdown) }
 
-    func makeUIView(context: Context) -> UITextView {
+    func makeUIViewController(context: Context) -> NativeEditorViewController {
         // `usingTextLayoutManager: true` selects TextKit 2.
         let textView = MarkdownUITextView(usingTextLayoutManager: true)
+        let controller = NativeEditorViewController(textView: textView)
+        // Install the native parent before table hosting controllers can be created during session setup.
+        controller.loadViewIfNeeded()
         textView.font = EditorTheme.proseFont
         textView.backgroundColor = EditorTheme.editorBackground
         textView.adjustsFontForContentSizeCategory = true
-        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         textView.keyboardDismissMode = .interactive
         // Smart punctuation would turn typed quotes and dashes into characters that break Markdown and code.
         textView.smartQuotesType = .no
@@ -221,10 +255,11 @@ private struct NoteTextView: UIViewRepresentable {
         if let initialSelection {
             textView.selectedRange = NSRange(location: min(initialSelection, textView.textStorage.length), length: 0)
         }
-        return textView
+        return controller
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIViewController(_ controller: NativeEditorViewController, context: Context) {
+        let textView = controller.textView
         context.coordinator.openURL = openURL
         let session = context.coordinator.session
         session.onSaveError = onSaveError
@@ -232,15 +267,17 @@ private struct NoteTextView: UIViewRepresentable {
         session.onOpenAttachment = onOpenAttachment
         session.applyAppearance(revision: appearanceRevision)
         session.refreshAttachmentsIfChanged()
-        if session.setShowsMarkdown(commands?.showsMarkdown ?? false) {
-            textView.layoutIfNeeded()
-            (textView as? MarkdownUITextView)?.revealCaret()
-        }
         commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
         commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
 
-    static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: NativeEditorViewController, context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height, width.isFinite, height.isFinite else { return nil }
+        // A scrolling editor fills its proposed viewport; its document never sets the column’s ideal height.
+        return CGSize(width: width, height: height)
+    }
+
+    static func dismantleUIViewController(_ controller: NativeEditorViewController, coordinator: Coordinator) {
         coordinator.session.flushSave()
     }
 
@@ -250,23 +287,27 @@ private struct NoteTextView: UIViewRepresentable {
         /// Opens a link that was tapped or clicked, the way the rest of the app does.
         var openURL: OpenURLAction?
         private weak var textView: MarkdownUITextView?
-        private var tableOverlay: TableOverlay?
+        private var tableViews: TableViewRegistry?
 
-        init(note: Note, commands: EditorCommands?) {
-            session = EditorSession(note: note, commands: commands)
+        init(note: Note, commands: EditorCommands?, rendersMarkdown: Bool) {
+            session = EditorSession(note: note, commands: commands, rendersMarkdown: rendersMarkdown)
         }
 
         func attach(to textView: MarkdownUITextView) {
             self.textView = textView
             textView.onCommand = { [weak self] in self?.perform($0) }
-            tableOverlay = TableOverlay(
-                container: textView,
-                origin: { [weak textView] in
-                    let inset = textView?.textContainerInset ?? .zero
-                    return CGPoint(x: inset.left, y: inset.top)
-                }
-            )
-            textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
+            tableViews = TableViewRegistry(container: textView)
+            tableViews?.onCellFocusChanged = { [weak commands = session.commands] focused in
+                commands?.isEditingTableCell = focused
+            }
+            textView.onFocusChange = { [weak self] in self?.tableViews?.scheduleUpdate() }
+            textView.languageMenuAt = { [weak self] in self?.languageMenu(at: $0) }
+            textView.onMoveDown = { [weak self, weak textView] in
+                guard let self, let textView,
+                      let edit = self.session.preview?.moveDownFromCode(at: textView.selectedRange) else { return false }
+                self.apply(edit)
+                return true
+            }
             textView.onBackspaceAtStart = { [weak self] in
                 guard let self, let action = self.session.preview?.backspace(at: 0) else { return false }
                 switch action {
@@ -277,13 +318,14 @@ private struct NoteTextView: UIViewRepresentable {
             }
             textView.onLayout = { [weak self] in
                 self?.session.preview?.containerWidthMayHaveChanged()
-                self?.tableOverlay?.layoutDidChange()
+                self?.tableViews?.layoutDidChange()
             }
             textView.onPaste = { [weak self] files in self?.session.paste(files) ?? false }
             textView.inputAccessoryView = MarkdownAccessoryView(
+                commands: session.commands,
                 onCommand: { [weak self] in self?.perform($0) },
                 onAttach: { [weak self] in self?.session.commands?.attach(from: $0) },
-                onDismiss: { [weak textView] in textView?.resignFirstResponder() }
+                onDismiss: { [weak textView] in textView?.endEditing(true) }
             )
 
             // A tap on a checkbox toggles it. The recognizer only begins when the tap lands on a box,
@@ -308,17 +350,17 @@ private struct NoteTextView: UIViewRepresentable {
                         textView?.backgroundColor = EditorTheme.editorBackground
                     },
                     applyBodyStyle: { [weak self] in self?.applyBodyStyle() },
-                    focus: { [weak textView] in Task { @MainActor in textView?.becomeFirstResponder() } }
+                    focus: { [weak textView] in Task { @MainActor in _ = textView?.becomeFirstResponder() } }
                 ),
                 textLayoutManager: textView.textLayoutManager
             )
-            tableOverlay?.connect(
+            tableViews?.connect(
                 to: session.preview,
                 apply: { [weak self] in self?.apply($0) },
                 placeCaret: { [weak self, weak textView] range in
                     textView?.selectedRange = range
                     self?.session.preview?.selectionChanged(to: range)
-                    textView?.becomeFirstResponder()
+                    _ = textView?.becomeFirstResponder()
                 }
             )
         }
@@ -331,6 +373,59 @@ private struct NoteTextView: UIViewRepresentable {
             let location = gesture.location(in: textView)
             let inset = textView.textContainerInset
             return CGPoint(x: location.x - inset.left, y: location.y - inset.top)
+        }
+
+        // MARK: Language menu
+
+        private let languageModel = LanguageMenuModel()
+        private var languageHost: UIHostingController<LanguageMenu>?
+
+        /// The menu over the language label at `point` (the text view's coordinates), or nil if there is no label there.
+        /// The text view asks while hit testing, so the touch goes to the menu itself and UIKit opens it. Elsewhere the
+        /// menu is parked at zero size, where it can catch nothing.
+        func languageMenu(at point: CGPoint) -> UIView? {
+            guard let textView, textView.markedTextRange == nil else {
+                languageHost?.view.frame = .zero
+                return nil
+            }
+            let inset = textView.textContainerInset
+            let container = CGPoint(x: point.x - inset.left, y: point.y - inset.top)
+            guard let hit = session.preview?.codeLanguageHit(at: container), let host = languageMenuHost(in: textView) else {
+                languageHost?.view.frame = .zero
+                return nil
+            }
+            let snapshot = textView.text ?? ""
+            let block = hit.block
+            // Hit testing runs several times during one touch. Changing anything the menu shows, even to the same value,
+            // rebuilds it while it is opening and closes it, so only real changes are made.
+            if languageModel.current != block.language { languageModel.current = block.language }
+            languageModel.onChoose = { [weak self, weak textView] id in
+                guard let self, let textView, textView.text == snapshot,
+                      let edit = MarkdownEditing.setCodeLanguage(id, inBlockAt: block.body.location, in: snapshot) else { return }
+                self.apply(edit)
+            }
+            let frame = hit.rect.offsetBy(dx: inset.left, dy: inset.top)
+            if host.view.frame != frame {
+                host.view.frame = frame
+                // Laid out now, or the menu's own button has no size yet and the first touch finds only its container.
+                host.view.layoutIfNeeded()
+            }
+            return host.view
+        }
+
+        private func languageMenuHost(in textView: UITextView) -> UIHostingController<LanguageMenu>? {
+            if let languageHost { return languageHost }
+            var responder: UIResponder? = textView
+            while responder != nil, !(responder is UIViewController) { responder = responder?.next }
+            guard let parent = responder as? UIViewController else { return nil }
+            let host = UIHostingController(rootView: LanguageMenu(model: languageModel))
+            host.view.backgroundColor = .clear
+            host.view.frame = .zero
+            parent.addChild(host)
+            textView.addSubview(host.view)
+            host.didMove(toParent: parent)
+            languageHost = host
+            return host
         }
 
         private func checklistLine(for gesture: UIGestureRecognizer) -> Int? {
@@ -356,7 +451,7 @@ private struct NoteTextView: UIViewRepresentable {
             if let point = containerPoint(for: gesture), let range = session.preview?.elementBoundary(at: point) {
                 textView.selectedRange = range
                 session.preview?.selectionChanged(to: range)
-                textView.becomeFirstResponder()
+                _ = textView.becomeFirstResponder()
                 return
             }
             if let url = linkURL(for: gesture) {
@@ -366,7 +461,7 @@ private struct NoteTextView: UIViewRepresentable {
             if let id = attachmentID(for: gesture), let attachment = session.catalog.attachment(with: id) {
                 if let point = containerPoint(for: gesture), let range = session.preview?.attachmentSelection(at: point), textView.selectedRange != range {
                     textView.selectedRange = range
-                    textView.becomeFirstResponder()
+                    _ = textView.becomeFirstResponder()
                 } else {
                     session.onOpenAttachment?(attachment)
                 }
@@ -389,14 +484,14 @@ private struct NoteTextView: UIViewRepresentable {
         }
 
         func insertBlock(_ markdown: String) {
-            guard let textView else { return }
+            guard session.commands?.isEditingTableCell != true, let textView else { return }
             apply(MarkdownEditing.insertBlock(markdown, in: textView.text, selection: textView.selectedRange))
         }
 
         func perform(_ command: MarkdownCommand) {
-            guard let textView else { return }
+            guard session.commands?.isEditingTableCell != true, let textView else { return }
             guard session.apply(MarkdownEditing.edit(command, in: textView.text, selection: textView.selectedRange)) else { return }
-            textView.becomeFirstResponder()
+            _ = textView.becomeFirstResponder()
         }
 
         private func apply(_ edit: TextEdit) { session.apply(edit) }
@@ -428,7 +523,7 @@ private struct NoteTextView: UIViewRepresentable {
                 session.onOpenAttachment?(attachment)
                 return false
             }
-            if text == "\t", textView.markedTextRange == nil, session.preview?.showsMarkdown != true,
+            if text == "\t", textView.markedTextRange == nil,
                let edit = MarkdownEditing.indentList(in: textView.text, selection: textView.selectedRange, outdent: false) {
                 apply(edit)
                 return false
@@ -461,10 +556,12 @@ private struct NoteTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             session.textDidChange()
+            (textView as? MarkdownUITextView)?.scheduleCaretReveal()
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !session.isApplyingEdit, textView.markedTextRange == nil else { return }
+            (textView as? MarkdownUITextView)?.scheduleCaretReveal()
             // The caret never rests inside Markdown that is drawn as a checkbox or a table.
             if let adjusted = session.preview?.adjustedSelection(to: textView.selectedRange) {
                 textView.selectedRange = adjusted
@@ -554,13 +651,14 @@ final class MarkdownNSTextView: NSTextView {
 private struct NoteTextView: NSViewRepresentable {
     let note: Note
     let appearanceRevision: Int
+    let rendersMarkdown: Bool
     @Environment(\.openURL) private var openURL
     let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands, rendersMarkdown: rendersMarkdown) }
 
     func makeNSView(context: Context) -> NSScrollView {
         // The same setup `NSTextView.scrollableTextView()` does, but with our own subclass.
@@ -579,7 +677,7 @@ private struct NoteTextView: NSViewRepresentable {
         textView.backgroundColor = EditorTheme.editorBackground
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.textContainerInset = NSSize(width: 16, height: 12)
         // Smart punctuation would turn typed quotes and dashes into characters that break Markdown and code.
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -601,7 +699,6 @@ private struct NoteTextView: NSViewRepresentable {
         session.onOpenAttachment = onOpenAttachment
         session.applyAppearance(revision: appearanceRevision)
         session.refreshAttachmentsIfChanged()
-        session.setShowsMarkdown(commands?.showsMarkdown ?? false)
         commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
         commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
@@ -616,22 +713,22 @@ private struct NoteTextView: NSViewRepresentable {
         /// Opens a link that was tapped or clicked, the way the rest of the app does.
         var openURL: OpenURLAction?
         private weak var textView: MarkdownNSTextView?
-        private var tableOverlay: TableOverlay?
+        private var tableViews: TableViewRegistry?
 
-        init(note: Note, commands: EditorCommands?) {
-            session = EditorSession(note: note, commands: commands)
+        init(note: Note, commands: EditorCommands?, rendersMarkdown: Bool) {
+            session = EditorSession(note: note, commands: commands, rendersMarkdown: rendersMarkdown)
         }
 
         func attach(to textView: MarkdownNSTextView) {
             self.textView = textView
-            tableOverlay = TableOverlay(
-                container: textView,
-                origin: { [weak textView] in textView?.textContainerOrigin ?? .zero }
-            )
-            textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
+            tableViews = TableViewRegistry(container: textView)
+            tableViews?.onCellFocusChanged = { [weak commands = session.commands] focused in
+                commands?.isEditingTableCell = focused
+            }
+            textView.onFocusChange = { [weak self] in self?.tableViews?.scheduleUpdate() }
             textView.onLayout = { [weak self] in
                 self?.session.preview?.containerWidthMayHaveChanged()
-                self?.tableOverlay?.layoutDidChange()
+                self?.tableViews?.layoutDidChange()
             }
             textView.onPaste = { [weak self] files in self?.session.paste(files) ?? false }
             textView.onCheckboxClick = { [weak self] point in self?.handleClick(at: point) ?? false }
@@ -653,7 +750,7 @@ private struct NoteTextView: NSViewRepresentable {
                 ),
                 textLayoutManager: textView.textLayoutManager
             )
-            tableOverlay?.connect(
+            tableViews?.connect(
                 to: session.preview,
                 apply: { [weak self] in self?.apply($0) },
                 placeCaret: { [weak textView] range in
@@ -680,6 +777,25 @@ private struct NoteTextView: NSViewRepresentable {
             guard let textView else { return false }
             let origin = textView.textContainerOrigin
             let point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+            if let block = session.preview?.codeLanguageBlock(at: point), !textView.hasMarkedText() {
+                let snapshot = textView.string
+                let menu = NSMenu(title: String(localized: "Language"))
+                let choices = [("", String(localized: "Plain Text"))] + CodeLanguages.all.map { ($0.id, $0.name) }
+                let target = CodeLanguageMenuTarget { [weak self, weak textView] language in
+                    guard let self, let textView, textView.string == snapshot,
+                          let edit = MarkdownEditing.setCodeLanguage(language, inBlockAt: block.body.location, in: snapshot) else { return }
+                    self.apply(edit)
+                }
+                for (id, name) in choices {
+                    let item = NSMenuItem(title: name, action: #selector(CodeLanguageMenuTarget.choose(_:)), keyEquivalent: "")
+                    item.target = target
+                    item.representedObject = id
+                    item.state = CodeLanguages.displayName(for: block.language) == name ? .on : .off
+                    menu.addItem(item)
+                }
+                withExtendedLifetime(target) { _ = menu.popUp(positioning: nil, at: location, in: textView) }
+                return true
+            }
             if let range = session.preview?.elementBoundary(at: point) {
                 textView.setSelectedRange(range)
                 session.preview?.selectionChanged(to: range)
@@ -709,13 +825,13 @@ private struct NoteTextView: NSViewRepresentable {
         // MARK: Formatting
 
         func perform(_ command: MarkdownCommand) {
-            guard let textView else { return }
+            guard session.commands?.isEditingTableCell != true, let textView else { return }
             guard session.apply(MarkdownEditing.edit(command, in: textView.string, selection: textView.selectedRange())) else { return }
             textView.window?.makeFirstResponder(textView)
         }
 
         func insertBlock(_ markdown: String) {
-            guard let textView else { return }
+            guard session.commands?.isEditingTableCell != true, let textView else { return }
             apply(MarkdownEditing.insertBlock(markdown, in: textView.string, selection: textView.selectedRange()))
         }
 
@@ -739,7 +855,12 @@ private struct NoteTextView: NSViewRepresentable {
         /// Return continues a list or checklist, and ends it on an empty item. Code blocks and text being
         /// composed keep the default behavior.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if !textView.hasMarkedText(), session.preview?.showsMarkdown != true,
+            if commandSelector == #selector(NSResponder.moveDown(_:)), !textView.hasMarkedText(),
+               let edit = session.preview?.moveDownFromCode(at: textView.selectedRange()) {
+                apply(edit)
+                return true
+            }
+            if !textView.hasMarkedText(),
                commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)),
                let edit = MarkdownEditing.indentList(in: textView.string, selection: textView.selectedRange(),
                                                       outdent: commandSelector == #selector(NSResponder.insertBacktab(_:))) {

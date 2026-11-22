@@ -90,13 +90,6 @@ struct EditorBehaviorTests {
         #expect(MarkdownTable.cells(of: row) == ["a\\\\", "b"])
     }
 
-    @Test func formattingATablePreservesEscapedPipes() throws {
-        let source = "| a \\| b | c |\n| --- | --- |\n| x | y |\n"
-        let edit = MarkdownEditing.edit(.formatTable, in: source, selection: NSRange(location: 3, length: 0))
-        let result = try #require(edit.transaction(in: source, selectionBefore: NSRange(location: 3, length: 0))).result
-        #expect(MarkdownTable(parsing: result) == MarkdownTable(parsing: source))
-    }
-
     @Test func insertingATableDoesNotSplitCRLF() throws {
         let source = "before\r\nafter"
         let caret = NSRange(location: 2, length: 0)
@@ -112,4 +105,68 @@ struct EditorBehaviorTests {
         #expect(MarkdownTable(parsing: "| First |\n| --- | --- |") == nil)
     }
 
+}
+
+/// Return inside bold, italic, strikethrough and inline code keeps each line's marks paired.
+struct InlineReturnTests {
+    /// Where `|` is, the caret. Returns the text after pressing Return there, with `|` where the caret ends up.
+    private func pressReturn(_ marked: String) -> String? {
+        let location = (marked as NSString).range(of: "|").location
+        let text = marked.replacingOccurrences(of: "|", with: "")
+        guard let edit = MarkdownEditing.returnKeyEdit(in: text, selection: NSRange(location: location, length: 0)) else { return nil }
+        var result = (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+        result = (result as NSString).replacingCharacters(in: NSRange(location: edit.selection.location, length: 0), with: "|")
+        return result
+    }
+
+    @Test(arguments: [("**", "bold"), ("_", "italic"), ("~~", "strikethrough"), ("`", "code")])
+    func returnAtTheEndOfTheTextEndsTheFormatting(marks: String, name: String) {
+        #expect(pressReturn("\(marks)hello|\(marks)") == "\(marks)hello\(marks)\n|", "\(name)")
+    }
+
+    @Test(arguments: ["**", "_", "~~", "`"])
+    func returnInTheMiddleClosesAndReopensTheSpan(marks: String) {
+        #expect(pressReturn("\(marks)hel|lo\(marks)") == "\(marks)hel\(marks)\n\(marks)|lo\(marks)")
+    }
+
+    @Test func returnAtTheStartOfTheTextMovesTheWholeSpanDown() {
+        #expect(pressReturn("**|hello**") == "\n**|hello**")
+    }
+
+    @Test func nestedSpansEndTogether() {
+        #expect(pressReturn("_**hello|**_") == "_**hello**_\n|")
+        #expect(pressReturn("_**hel|lo**_") == "_**hel**_\n_**|lo**_")
+    }
+
+    @Test func formattingSwitchedOnWithNothingTypedIsCancelled() {
+        #expect(pressReturn("**|**") == "\n|")
+        #expect(pressReturn("_|_") == "\n|")
+        #expect(pressReturn("~~|~~") == "\n|")
+    }
+
+    @Test func listItemsContinueWithTheirMarkAndKeepTheFormatting() {
+        #expect(pressReturn("- **hello|**") == "- **hello**\n- |")
+        #expect(pressReturn("- **he|llo**") == "- **he**\n- **|llo**")
+        #expect(pressReturn("- [ ] **he|llo**") == "- [ ] **he**\n- [ ] **|llo**")
+        #expect(pressReturn("1. **hello|**") == "1. **hello**\n2. |")
+    }
+
+    @Test func everyResultKeepsEachLinesMarksPaired() throws {
+        for source in ["**hel|lo**", "_hel|lo_", "~~hel|lo~~", "`hel|lo`", "a **b|c** d", "- **x|y**"] {
+            let result = try #require(pressReturn(source)).replacingOccurrences(of: "|", with: "")
+            for line in result.split(separator: "\n") {
+                let spans = InlineScanner.spans(in: String(line))
+                let markCount = spans.reduce(0) { $0 + $1.markers.count }
+                let plain = String(line).filter { "*_~`".contains($0) }.count
+                #expect(markCount > 0 && plain >= markCount, "\(source.debugDescription): \(line.debugDescription) has stray marks")
+            }
+        }
+    }
+
+    @Test func returnOutsideAnySpanIsAPlainLineBreak() {
+        #expect(pressReturn("hello| **world**") == nil)
+        #expect(pressReturn("**hello**| world") == nil)
+        #expect(pressReturn("**hello** world|") == nil)
+        #expect(pressReturn("plain|") == nil)
+    }
 }

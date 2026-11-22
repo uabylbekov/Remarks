@@ -165,7 +165,7 @@ public struct GetNoteTextIntent: AppIntent {
 
 public struct OpenNoteIntent: OpenIntent {
     public static let title: LocalizedStringResource = "Open Note"
-    public static let description = IntentDescription("Opens a note in Notes.", categoryName: "Notes")
+    public static let description = IntentDescription("Opens a note in Remarks.", categoryName: "Notes")
     public static var supportedModes: IntentModes { .foreground(.immediate) }
 
     @Parameter(title: "Note") public var target: NoteEntity

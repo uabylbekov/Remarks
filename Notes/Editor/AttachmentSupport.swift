@@ -189,7 +189,6 @@ final class AttachmentFragment: NSTextLayoutFragment {
 
     private func drawChip(_ display: AttachmentDisplay?, in area: CGRect, context: CGContext) {
         let chip = visibleRect(in: area)
-        let height = chip.height
         context.setFillColor(EditorTheme.codeBackground.cgColor)
         context.addPath(CGPath(roundedRect: chip, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
         context.fillPath()

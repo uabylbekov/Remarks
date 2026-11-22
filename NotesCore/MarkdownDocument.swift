@@ -132,7 +132,9 @@ public struct MarkdownDocument: Equatable, Sendable {
         if let attachment = AttachmentLine.parse(line) { return .attachment(attachment) }
 
         let text = line.trimmingCharacters(in: .newlines)
-        if ruleExpression?.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil {
+        // `****` alone is bold switched on with nothing typed yet, not a rule: the Bold command writes it on an empty line.
+        if text.trimmingCharacters(in: .whitespaces) != "****",
+           ruleExpression?.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil {
             return .rule
         }
         if let match = quoteExpression?.firstMatch(in: line, range: full) {

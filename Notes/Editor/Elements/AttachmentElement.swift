@@ -37,17 +37,13 @@ struct AttachmentElement: MarkdownElement {
         paragraph.addAttribute(LivePreviewController.attachmentKey, value: attachment.id.uuidString, range: full)
         paragraph.addAttribute(LivePreviewController.attachmentHeightKey, value: Double(height), range: full)
 
-        if services.showsMarkdown {
-            paragraph.addAttributes([.foregroundColor: EditorTheme.dimColor, .backgroundColor: EditorTheme.codeBackground], range: full)
-        } else {
-            // Use a native attachment glyph for selection geometry. This paragraph is display-only:
-            // replacing one UTF-16 character preserves every source offset and the stored Markdown.
-            paragraph.addAttributes([.foregroundColor: EditorColor.clear,
-                                     .font: EditorFont.systemFont(ofSize: 0.01)], range: full)
-            let attachment = AttachmentDrawing.placeholder(size: displaySize)
-            paragraph.replaceCharacters(in: NSRange(location: 0, length: 1), with: "\u{FFFC}")
-            paragraph.addAttribute(.attachment, value: attachment, range: NSRange(location: 0, length: 1))
-        }
+        // Use a native attachment glyph for selection geometry. This paragraph is display-only:
+        // replacing one UTF-16 character preserves every source offset and the stored Markdown.
+        paragraph.addAttributes([.foregroundColor: EditorColor.clear,
+                                 .font: EditorFont.systemFont(ofSize: 0.01)], range: full)
+        let placeholder = AttachmentDrawing.placeholder(size: displaySize)
+        paragraph.replaceCharacters(in: NSRange(location: 0, length: 1), with: "\u{FFFC}")
+        paragraph.addAttribute(.attachment, value: placeholder, range: NSRange(location: 0, length: 1))
         return true
     }
 

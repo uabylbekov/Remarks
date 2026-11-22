@@ -15,6 +15,7 @@ struct SidebarView: View {
     /// Set to true to ask for a new top-level folder. The window shows the question, so the File menu and this
     /// button share it.
     @Binding var asksNewFolder: Bool
+    /// Whether the sidebar is open. A closed sidebar has no toolbar button, even when the window has room for one.
     let showsNewFolderButton: Bool
     /// Shows a note that was just created here. The window owns the selection.
     var openNote: (UUID) -> Void = { _ in }
@@ -45,7 +46,7 @@ struct SidebarView: View {
                     Label("Unfiled", systemImage: "tray")
                 }
                 .dropDestination(for: NoteReference.self) { references, _ in
-                    moveNotes(references, to: nil)
+                    _ = moveNotes(references, to: nil)
                 }
             }
 
@@ -104,12 +105,12 @@ struct SidebarView: View {
         #endif
         .toolbar {
             #if os(macOS)
-            // Folder management follows the sidebar's column visibility.
-            if showsNewFolderButton {
-                ToolbarItem {
-                    Button("New Folder", systemImage: "folder.badge.plus") { asksNewFolder = true }
-                }
+            // Hidden rather than left out, so the system fades the button in and out instead of building it when the
+            // sidebar opens, which is when its icon used to draw late.
+            ToolbarItem {
+                Button("New Folder", systemImage: "folder.badge.plus") { asksNewFolder = true }
             }
+            .hidden(!showsNewFolderButton)
             #else
             ToolbarItem(placement: .topBarLeading) {
                 Button("Settings", systemImage: "gearshape") { showsSettings = true }
@@ -174,7 +175,7 @@ struct SidebarView: View {
         .badge(count)
         .contextMenu { folderMenu(folder) }
         .dropDestination(for: NoteReference.self) { references, _ in
-            moveNotes(references, to: folder)
+            _ = moveNotes(references, to: folder)
         }
     }
 

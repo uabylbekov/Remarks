@@ -1,14 +1,14 @@
 import SwiftUI
 import NotesCore
 
-/// A GitHub Markdown table. A complete one (it has a separator row) is a grid of editable cells, drawn by `TableGridView`
-/// over room that its first row holds (see `TableOverlay`). One without a separator row is shown as text in the code font.
+/// A complete Markdown table reserves native layout space for its hosted SwiftUI grid.
+/// Its first source row reserves the grid’s metrics. Incomplete tables remain editable text in the code font.
 /// Neither depends on the caret.
 struct TableElement: MarkdownElement {
     var readsInline: Bool { false }
 
     func style(_ paragraph: NSMutableAttributedString, line: ElementLine, services: ElementServices) -> Bool {
-        if !services.showsMarkdown, let table = services.tableModel(for: line.block) {
+        if let table = services.tableModel(for: line.block) {
             styleGridRow(paragraph, isFirst: line.range.location == line.block.range.location, table: table, services: services)
         } else {
             styleTextRow(paragraph, range: line.range, services: services)
@@ -39,9 +39,8 @@ struct TableElement: MarkdownElement {
                                             padding: services.linePadding, gutter: LivePreviewController.tableGutter)
             let anchor = NSRange(location: 0, length: 1)
             paragraph.replaceCharacters(in: anchor, with: "\u{FFFC}")
-            paragraph.addAttribute(.attachment, value: AttachmentDrawing.placeholder(
-                size: CGSize(width: width + LivePreviewController.tableGutter, height: height)
-            ), range: anchor)
+            let size = CGSize(width: width + LivePreviewController.tableGutter, height: height)
+            paragraph.addAttribute(.attachment, value: AttachmentDrawing.placeholder(size: size), range: anchor)
         }
     }
 

@@ -76,6 +76,9 @@ enum EditorTheme {
         return style
     }
 
+    /// The line spacing setting for code, as a fraction of the code font size, like `bodyParagraphStyle` does for text.
+    static var codeLineSpacing: CGFloat { codeFont.pointSize * settings.lineSpacing }
+
     /// Heading level 1 to 6. Levels 5 and 6 stay at body size.
     static func headingFont(level: Int) -> EditorFont {
         let scale = [1.7, 1.45, 1.25, 1.1, 1.0, 1.0][min(max(level, 1), 6) - 1]
@@ -158,19 +161,12 @@ enum EditorTheme {
         #endif
     }
 
-    /// The editor's background: the system color, or paper grain (a tiled pattern drawn in code, one per appearance).
+    /// The editor's background: the system color.
     static var editorBackground: EditorColor {
-        guard settings.background == .paper else {
-            #if canImport(UIKit)
-            return .systemBackground
-            #else
-            return .textBackgroundColor
-            #endif
-        }
         #if canImport(UIKit)
-        return UIColor { PaperGrain.color(dark: $0.userInterfaceStyle == .dark) }
+        .systemBackground
         #else
-        return NSColor(name: nil) { PaperGrain.color(dark: $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) }
+        .textBackgroundColor
         #endif
     }
 
@@ -213,55 +209,3 @@ typealias EditorFontDescriptor = UIFontDescriptor
 #else
 typealias EditorFontDescriptor = NSFontDescriptor
 #endif
-
-/// Paper grain: a small tile of near-system color, with a barely warm tint and very fine speckles, repeated. Made once
-/// per appearance, with a fixed seed so it never shimmers between launches.
-private enum PaperGrain {
-    private static let side = 128
-    private static let scale = 2
-    nonisolated(unsafe) private static var cache: [Bool: EditorColor] = [:]
-    private static let lock = NSLock()
-
-    static func color(dark: Bool) -> EditorColor {
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = cache[dark] { return cached }
-        let made = make(dark: dark)
-        cache[dark] = made
-        return made
-    }
-
-    private static func make(dark: Bool) -> EditorColor {
-        let pixels = side * scale
-        let base: (r: Double, g: Double, b: Double) = dark ? (0.110, 0.110, 0.118) : (0.992, 0.990, 0.982)
-        // Speckles go the other way from the paper: darker on light paper, lighter on dark.
-        let speck: Double = dark ? 1 : 0
-        var data = [UInt8](repeating: 0, count: pixels * pixels * 4)
-        var state: UInt64 = 0x9E3779B97F4A7C15
-        func next() -> Double {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
-            return Double(state >> 11) / Double(1 << 53)
-        }
-        for i in 0..<(pixels * pixels) {
-            // Most pixels get a very faint change; a few get more, which reads as fibers.
-            let amount = next() < 0.04 ? 0.012 + next() * 0.016 : next() * 0.006
-            data[i * 4] = UInt8((base.r + (speck - base.r) * amount) * 255)
-            data[i * 4 + 1] = UInt8((base.g + (speck - base.g) * amount) * 255)
-            data[i * 4 + 2] = UInt8((base.b + (speck - base.b) * amount) * 255)
-            data[i * 4 + 3] = 255
-        }
-        let image: CGImage? = data.withUnsafeMutableBytes { buffer in
-            CGContext(
-                data: buffer.baseAddress, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: pixels * 4,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            )?.makeImage()
-        }
-        guard let image else { return EditorColor(red: base.r, green: base.g, blue: base.b, alpha: 1) }
-        #if canImport(UIKit)
-        return UIColor(patternImage: UIImage(cgImage: image, scale: CGFloat(scale), orientation: .up))
-        #else
-        return NSColor(patternImage: NSImage(cgImage: image, size: NSSize(width: side, height: side)))
-        #endif
-    }
-}

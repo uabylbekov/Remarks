@@ -68,9 +68,4 @@ enum InlineStyler {
               let base = text.attribute(.font, at: range.location, effectiveRange: nil) as? EditorFont else { return }
         text.addAttribute(.font, value: EditorFont.systemFont(ofSize: base.pointSize * 0.7), range: range)
     }
-
-    /// Hides a mark, or dims it when Markdown is shown. This is what each element does with its own mark.
-    static func hideOrDim(_ text: NSMutableAttributedString, range: NSRange, showsMarkdown: Bool) {
-        if showsMarkdown { dimMarker(text, range: range, shrinks: true) } else { collapse(text, range: range) }
-    }
 }
