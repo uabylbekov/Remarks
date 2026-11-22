@@ -7,19 +7,20 @@ import NotesCore
 struct ContentView: View {
     @State private var scope: NoteScope? = .all
     @State private var selectedNoteID: UUID?
+    @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
+    @State private var errorMessage: String?
     @Environment(\.modelContext) private var context
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var asksNewFolder = false
     @State private var newFolderName = ""
     private let router = NavigationRouter.shared
 
     var body: some View {
-        splitView
-    }
-
-    private var splitView: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selection: $scope, isSidebarVisible: columnVisibility != .doubleColumn && columnVisibility != .detailOnly)
+        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
+            SidebarView(selection: $scope, asksNewFolder: $asksNewFolder) { id in
+                scope = .all
+                selectedNoteID = id
+                preferredColumn = .detail
+            }
         } content: {
             NoteListView(scope: scope ?? .all, selectedNoteID: $selectedNoteID)
         } detail: {
@@ -39,22 +40,31 @@ struct ContentView: View {
         .alert("New Folder", isPresented: $asksNewFolder) {
             TextField("Name", text: $newFolderName)
             Button("Create") {
-                if let folder = try? Library(context: context).createFolder(named: newFolderName) {
+                do {
+                    let folder = try Library(context: context).createFolder(named: newFolderName)
+                    try context.save()
                     scope = .folder(folder.id)
+                    preferredColumn = .content
+                } catch {
+                    errorMessage = error.localizedDescription
                 }
             }
+            .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         }
-        .onChange(of: scope) { selectedNoteID = nil }
+        .alert("Unable to Create Folder", item: $errorMessage) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(verbatim: message)
+        }
         // "Open Note" from Siri or Shortcuts. `initial: true` also catches a request made before this view existed.
+        // The list keeps a selection only if that note is in the list, so changing the scope here is enough.
         .onChange(of: router.pendingNoteID, initial: true) { _, noteID in
             guard let noteID else { return }
-            if scope != .all { scope = .all }
-            // Wait one turn, so the scope change above does not clear the selection we are about to make.
-            Task { @MainActor in
-                selectedNoteID = noteID
-                router.didOpen()
-            }
+            scope = .all
+            selectedNoteID = noteID
+            preferredColumn = .detail
+            router.didOpen()
         }
     }
 }

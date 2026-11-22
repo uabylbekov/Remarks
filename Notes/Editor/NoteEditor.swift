@@ -1,6 +1,7 @@
 import SwiftUI
 import ImageIO
 import SwiftData
+import UniformTypeIdentifiers
 import NotesCore
 
 #if canImport(UIKit)
@@ -9,18 +10,30 @@ import UIKit
 import AppKit
 #endif
 
-/// Lets a toolbar outside the editor run formatting commands in it. The Mac editor connects itself when it appears.
+/// Lets a toolbar outside the editor run formatting commands in it, and lets the editor ask the screen around it for
+/// things only SwiftUI can show (a picker for an attachment). The Mac editor connects itself when it appears.
 @MainActor
+@Observable
 final class EditorCommands {
-    var handler: ((MarkdownCommand) -> Void)?
+    // Plain hooks the editor sets for itself. Nothing watches them.
+    @ObservationIgnored var handler: ((MarkdownCommand) -> Void)?
     /// Puts Markdown on its own line at the caret. Used to insert an attachment.
-    var insert: ((String) -> Void)?
-    /// Asks the screen around the editor to pick an attachment from this source. Set by that screen.
-    var requestAttachment: ((AttachmentSource) -> Void)?
+    @ObservationIgnored var insert: ((String) -> Void)?
+
+    // State the screen around the editor watches (`AttachmentPickers`), instead of closures it has to install.
+    /// Set when the user asks to add an attachment from a source. The screen shows the picker and clears it.
+    var attachmentRequest: AttachmentSource?
+    /// Whether the Markdown marks (`#`, `**`, link addresses) are shown. Off, they are hidden once they take effect.
+    var showsMarkdown = UserDefaults.standard.bool(forKey: "showsMarkdown") {
+        didSet { UserDefaults.standard.set(showsMarkdown, forKey: "showsMarkdown") }
+    }
+    /// Pictures and files pasted into the editor. The screen turns them into attachments and clears the list.
+    var pastedFiles: [PastedFile] = []
 
     func perform(_ command: MarkdownCommand) { handler?(command) }
+    func pasted(_ files: [PastedFile]) { pastedFiles += files }
     func insertBlock(_ markdown: String) { insert?(markdown) }
-    func attach(from source: AttachmentSource) { requestAttachment?(source) }
+    func attach(from source: AttachmentSource) { attachmentRequest = source }
 }
 
 extension FocusedValues {
@@ -29,17 +42,22 @@ extension FocusedValues {
 }
 
 /// The note editor: a TextKit 2 text view with live Markdown preview (Spec 03).
-/// The stored text is always the real Markdown. Edits are saved through `Note.setBody` after a short pause,
-/// and immediately when editing ends or the editor goes away.
+/// The stored text is always the real Markdown. Model updates are immediate; disk saves are debounced
+/// and flushed when editing ends or the editor goes away.
 struct NoteEditor: View {
     let note: Note
     /// Where to put the caret when the note first appears. Used by previews, to show a note while editing.
     var initialSelection: Int?
     /// Set by a toolbar that wants to format the text. Used on the Mac.
     var commands: EditorCommands?
+    /// Called when an attachment is tapped or clicked. The screen around the editor shows it.
+    var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
     @Environment(\.history) private var history
 
+    var onSaveError: ((String) -> Void)?
+    @State private var saveError: String?
     @State private var notice: String?
+    @State private var noticeID: UUID?
 
     var body: some View {
         // Reading the revision here makes SwiftUI update the text view whenever an appearance setting changes.
@@ -48,8 +66,15 @@ struct NoteEditor: View {
             history: history,
             appearanceRevision: AppearanceModel.shared.revision,
             onKeptEdits: { showNotice() },
+            onSaveError: { message in
+                // Dismantling an editor can flush a save while SwiftUI is updating views.
+                Task { @MainActor in
+                    if let onSaveError { onSaveError(message) } else { saveError = message }
+                }
+            },
             initialSelection: initialSelection,
-            commands: commands
+            commands: commands,
+            onOpenAttachment: onOpenAttachment
         )
         .overlay(alignment: .top) {
             if let notice {
@@ -63,6 +88,18 @@ struct NoteEditor: View {
             }
         }
         .animation(.default, value: notice)
+        .task(id: noticeID) {
+            guard noticeID != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(4))
+                notice = nil
+            } catch {
+                // A newer notice or disappearance cancels this dismissal.
+            }
+        }
+        .alert("Unable to Save Note", item: $saveError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { Text(verbatim: $0) }
     }
 
     /// The note was changed from outside while you were typing. Your text stays, and the other version
@@ -71,15 +108,9 @@ struct NoteEditor: View {
         let message = String(localized: "Another change was saved to Version History")
         notice = message
         AccessibilityNotification.Announcement(message).post()
-        Task {
-            try? await Task.sleep(for: .seconds(4))
-            if notice == message { notice = nil }
-        }
+        noticeID = UUID()
     }
 }
-
-/// How long typing must pause before the text is written to the note.
-private let saveDelay: Duration = .milliseconds(400)
 
 #if canImport(UIKit)
 
@@ -88,6 +119,51 @@ private let saveDelay: Duration = .milliseconds(400)
 /// Adds hardware-keyboard shortcuts for the formatting commands.
 private final class MarkdownUITextView: UITextView {
     var onCommand: ((MarkdownCommand) -> Void)?
+    /// Called with a pasted picture. Returns false when nothing took it, so the text view pastes normally.
+    var onPaste: (([PastedFile]) -> Bool)?
+    /// Called after every layout, so the editor can notice a change of width (rotation, a resized window).
+    var onLayout: (() -> Void)?
+    /// Called when the text view gains or loses the keyboard.
+    var onFocusChange: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        onFocusChange?()
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        onFocusChange?()
+        return result
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), onPaste != nil, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        // Text wins when the clipboard holds both, as when copying from a web page.
+        if !UIPasteboard.general.hasStrings, let file = Self.pastedPicture(), onPaste?([file]) == true { return }
+        super.paste(sender)
+    }
+
+    private static func pastedPicture() -> PastedFile? {
+        let board = UIPasteboard.general
+        for type in [UTType.png, .jpeg, .heic, .gif] {
+            if let data = board.data(forPasteboardType: type.identifier) {
+                return PastedFile(data: data, fileName: "Pasted Image.\(type.preferredFilenameExtension ?? "png")", type: type)
+            }
+        }
+        guard let image = board.image, let data = image.pngData() else { return nil }
+        return PastedFile(data: data, fileName: "Pasted Image.png", type: .png)
+    }
 
     private static let shortcuts: [(title: String, input: String, flags: UIKeyModifierFlags, name: String)] = [
         ("Bold", "b", .command, "bold"),
@@ -128,9 +204,12 @@ private struct NoteTextView: UIViewRepresentable {
     let note: Note
     let history: HistoryRecorder?
     let appearanceRevision: Int
+    @Environment(\.openURL) private var openURL
     let onKeptEdits: () -> Void
+    let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
+    var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history, commands: commands) }
 
@@ -146,6 +225,7 @@ private struct NoteTextView: UIViewRepresentable {
         textView.smartDashesType = .no
         textView.smartInsertDeleteType = .no
         textView.delegate = context.coordinator
+        context.coordinator.session.onSaveError = onSaveError
         context.coordinator.attach(to: textView)
         if let initialSelection {
             textView.selectedRange = NSRange(location: min(initialSelection, textView.textStorage.length), length: 0)
@@ -154,49 +234,57 @@ private struct NoteTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        context.coordinator.update(note: note)
-        context.coordinator.onKeptEdits = onKeptEdits
-        context.coordinator.applyAppearance(revision: appearanceRevision)
-        context.coordinator.refreshAttachmentsIfChanged()
+        context.coordinator.openURL = openURL
+        let session = context.coordinator.session
+        session.onSaveError = onSaveError
+        session.update(note: note)
+        session.onKeptEdits = onKeptEdits
+        session.onOpenAttachment = onOpenAttachment
+        session.applyAppearance(revision: appearanceRevision)
+        session.refreshAttachmentsIfChanged()
+        session.setShowsMarkdown(commands?.showsMarkdown ?? false)
         commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
         commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
 
     static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
-        coordinator.flushSave()
+        coordinator.session.flushSave()
     }
 
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
-        private var note: Note
+        let session: EditorSession
+        /// Opens a link that was tapped or clicked, the way the rest of the app does.
+        var openURL: OpenURLAction?
         private weak var textView: MarkdownUITextView?
-        private var preview: LivePreviewController?
-        private var saveTask: Task<Void, Never>?
-
-        private let history: HistoryRecorder?
-        private let commands: EditorCommands?
-        private lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
-        private var attachmentSignature = 0
+        private var tableOverlay: TableOverlay?
 
         init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
-            self.history = history
-            self.note = note
-            self.commands = commands
+            session = EditorSession(note: note, history: history, commands: commands)
         }
 
         func attach(to textView: MarkdownUITextView) {
             self.textView = textView
             textView.onCommand = { [weak self] in self?.perform($0) }
+            tableOverlay = TableOverlay(
+                container: textView,
+                origin: { [weak textView] in
+                    let inset = textView?.textContainerInset ?? .zero
+                    return CGPoint(x: inset.left, y: inset.top)
+                },
+                isFocused: { [weak textView] in textView?.isFirstResponder ?? false }
+            )
+            textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
+            textView.onLayout = { [weak self] in
+                self?.session.preview?.containerWidthMayHaveChanged()
+                self?.tableOverlay?.layoutDidChange()
+            }
+            textView.onPaste = { [weak self] files in self?.session.paste(files) ?? false }
             textView.inputAccessoryView = MarkdownAccessoryView(
                 onCommand: { [weak self] in self?.perform($0) },
-                onAttach: { [weak self] in self?.commands?.attach(from: $0) },
+                onAttach: { [weak self] in self?.session.commands?.attach(from: $0) },
                 onDismiss: { [weak textView] in textView?.resignFirstResponder() }
             )
-            if let layoutManager = textView.textLayoutManager,
-               let contentStorage = layoutManager.textContentManager as? NSTextContentStorage {
-                preview = LivePreviewController(contentStorage: contentStorage, layoutManager: layoutManager)
-                preview?.attachmentProvider = { [weak self] in self?.catalog.display(for: $0) }
-            }
 
             // A tap on a checkbox toggles it. The recognizer only begins when the tap lands on a box,
             // and the text view's own tap recognizers wait for it, so the caret does not jump to that line.
@@ -206,33 +294,72 @@ private struct NoteTextView: UIViewRepresentable {
             for recognizer in textView.gestureRecognizers ?? [] where recognizer !== tap && recognizer is UITapGestureRecognizer {
                 recognizer.require(toFail: tap)
             }
-            load()
+
+            session.attach(
+                host: .init(
+                    text: { [weak textView] in textView?.text ?? "" },
+                    setText: { [weak textView] in textView?.text = $0 },
+                    selection: { [weak textView] in textView?.selectedRange ?? NSRange(location: 0, length: 0) },
+                    isComposing: { [weak textView] in textView?.markedTextRange != nil },
+                    applyEdit: { [weak self] in self?.replaceText($0) ?? false },
+                    undoManager: { [weak textView] in textView?.undoManager },
+                    applyFont: { [weak textView] in textView?.font = EditorTheme.proseFont },
+                    applyBodyStyle: { [weak self] in self?.applyBodyStyle() },
+                    focus: { [weak textView] in Task { @MainActor in textView?.becomeFirstResponder() } }
+                ),
+                textLayoutManager: textView.textLayoutManager
+            )
+            tableOverlay?.connect(
+                to: session.preview,
+                apply: { [weak self] in self?.apply($0) },
+                placeCaret: { [weak self, weak textView] range in
+                    textView?.selectedRange = range
+                    self?.session.preview?.selectionChanged(to: range)
+                    textView?.becomeFirstResponder()
+                }
+            )
         }
 
-        // MARK: Checkboxes
+        // MARK: Taps
 
-        private func checklistLine(for gesture: UIGestureRecognizer) -> Int? {
-            guard let textView, let preview else { return nil }
+        /// Where a gesture is, in the text container's coordinates.
+        private func containerPoint(for gesture: UIGestureRecognizer) -> CGPoint? {
+            guard let textView else { return nil }
             let location = gesture.location(in: textView)
             let inset = textView.textContainerInset
-            return preview.checklistLine(at: CGPoint(x: location.x - inset.left, y: location.y - inset.top))
+            return CGPoint(x: location.x - inset.left, y: location.y - inset.top)
+        }
+
+        private func checklistLine(for gesture: UIGestureRecognizer) -> Int? {
+            containerPoint(for: gesture).flatMap { session.preview?.checklistLine(at: $0) }
         }
 
         private func attachmentID(for gesture: UIGestureRecognizer) -> UUID? {
-            guard let textView, let preview else { return nil }
-            let location = gesture.location(in: textView)
-            let inset = textView.textContainerInset
-            return preview.attachmentID(at: CGPoint(x: location.x - inset.left, y: location.y - inset.top))
+            containerPoint(for: gesture).flatMap { session.preview?.attachmentID(at: $0) }
+        }
+
+        private func linkURL(for gesture: UIGestureRecognizer) -> URL? {
+            containerPoint(for: gesture).flatMap { session.preview?.linkURL(at: $0) }
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             checklistLine(for: gestureRecognizer) != nil || attachmentID(for: gestureRecognizer) != nil
+                || linkURL(for: gestureRecognizer) != nil
         }
 
         @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
             guard let textView else { return }
-            if let id = attachmentID(for: gesture), let attachment = catalog.attachment(with: id) {
-                AttachmentOpener.open(attachment, from: textView)
+            if let url = linkURL(for: gesture) {
+                openURL?(url)
+                return
+            }
+            if let id = attachmentID(for: gesture), let attachment = session.catalog.attachment(with: id) {
+                if let range = session.preview?.attachmentSelection(for: id), textView.selectedRange != range {
+                    textView.selectedRange = range
+                    textView.becomeFirstResponder()
+                } else {
+                    session.onOpenAttachment?(attachment)
+                }
                 return
             }
             guard let line = checklistLine(for: gesture),
@@ -241,118 +368,42 @@ private struct NoteTextView: UIViewRepresentable {
             apply(edit)
         }
 
-        // MARK: Attachments
+        // MARK: Formatting
+
+        /// Gives ordinary text the line spacing setting, including what is typed next on an empty line.
+        private func applyBodyStyle() {
+            guard let textView else { return }
+            let style = EditorTheme.bodyParagraphStyle
+            textView.textStorage.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: textView.textStorage.length))
+            textView.typingAttributes[.paragraphStyle] = style
+        }
 
         func insertBlock(_ markdown: String) {
             guard let textView else { return }
             apply(MarkdownEditing.insertBlock(markdown, in: textView.text, selection: textView.selectedRange))
         }
 
-        /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.
-        func refreshAttachmentsIfChanged() {
-            let signature = catalog.signature
-            guard signature != attachmentSignature else { return }
-            attachmentSignature = signature
-            preview?.refreshAttachments()
-        }
-
-        private var appearanceRevision = AppearanceModel.shared.revision
-        /// The text last loaded into, or saved from, the editor. See `EditorSync`.
-        private var baseBody = ""
-        var onKeptEdits: (() -> Void)?
-
-        /// Re-styles the open note after a font, size, or theme change (Spec 11, S2).
-        func applyAppearance(revision: Int) {
-            guard revision != appearanceRevision, let textView else { return }
-            appearanceRevision = revision
-            textView.font = EditorTheme.proseFont
-            preview?.reload()
-        }
-
-        /// SwiftUI re-evaluates this when the note or its body changes (including changes that arrive by sync).
-        func update(note newNote: Note) {
-            guard let textView else { return }
-            if newNote.id != note.id {
-                flushSave()
-                note = newNote
-                load()
-            } else {
-                followStoredNote(editorText: textView.text)
-            }
-        }
-
-        /// The stored note may have changed under the editor (iCloud, Siri, Shortcuts). Never replace text the
-        /// user has typed, and never lose either side (Spec 06).
-        private func followStoredNote(editorText: String) {
-            switch EditorSync.decide(editorText: editorText, baseBody: baseBody, incomingBody: note.body) {
-            case .keepEditorText:
-                break
-            case .adoptIncoming:
-                // Keep the text that is about to be replaced (Spec 02, S2).
-                history?.record(noteID: note.id, body: editorText, reason: .beforeSyncUpdate, force: true)
-                load()
-            case .keepTypedTextAndSaveIncoming:
-                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
-                baseBody = note.body
-                onKeptEdits?()
-            }
-        }
-
-        private func load() {
-            guard let textView else { return }
-            textView.text = note.body
-            baseBody = note.body
-            preview?.reload()
-            if note.body.isEmpty {
-                // A new note is ready to type into.
-                DispatchQueue.main.async { textView.becomeFirstResponder() }
-            }
-        }
-
-        // MARK: Saving
-
-        /// Writes the editor's text to the note, but only if the user changed it. Saving unchanged text could
-        /// undo an outside change the editor has not shown yet. Text the editor never saw is kept as a version first.
-        private func saveIfTyped(_ text: String) {
-            guard text != baseBody else { return }
-            if EditorSync.unseenTextBeingOverwritten(editorText: text, baseBody: baseBody, storedBody: note.body) {
-                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
-            }
-            note.setBody(text)
-            baseBody = note.body
-            history?.record(noteID: note.id, body: note.body, reason: .edit)
-        }
-
-        func flushSave() {
-            saveTask?.cancel()
-            guard let textView else { return }
-            saveIfTyped(textView.text)
-        }
-
-        private func scheduleSave() {
-            saveTask?.cancel()
-            saveTask = Task {
-                try? await Task.sleep(for: saveDelay)
-                guard !Task.isCancelled else { return }
-                flushSave()
-            }
-        }
-
-        // MARK: Formatting
-
         func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
             apply(MarkdownEditing.edit(command, in: textView.text, selection: textView.selectedRange))
         }
 
-        /// `replace(_:withText:)` goes through the text input system, so undo and redo keep working.
-        private func apply(_ edit: TextEdit) {
+        private func apply(_ edit: TextEdit) { session.apply(edit) }
+
+        /// Use native text input for undo registration, rather than replacing the whole document.
+        private func replaceText(_ edit: TextEdit) -> Bool {
             guard let textView,
                   let start = textView.position(from: textView.beginningOfDocument, offset: edit.range.location),
                   let end = textView.position(from: start, offset: edit.range.length),
-                  let range = textView.textRange(from: start, to: end) else { return }
-            textView.replace(range, withText: edit.replacement)
+                  let range = textView.textRange(from: start, to: end) else { return false }
+            if textView.text(in: range) != edit.replacement {
+                let undoManager = textView.undoManager
+                undoManager?.beginUndoGrouping()
+                textView.replace(range, withText: edit.replacement)
+                undoManager?.endUndoGrouping()
+            }
             textView.selectedRange = edit.selection
+            return true
         }
 
         // MARK: UITextViewDelegate
@@ -360,8 +411,37 @@ private struct NoteTextView: UIViewRepresentable {
         /// Return continues a list or checklist, and ends it on an empty item. Code blocks and text being
         /// composed (Japanese, Chinese, and so on) keep the default behavior.
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            guard !session.isApplyingEdit else { return true }
+            if text == " ", let id = session.preview?.attachmentID(in: range),
+               let attachment = session.catalog.attachment(with: id) {
+                session.onOpenAttachment?(attachment)
+                return false
+            }
+            if text == "\t", textView.markedTextRange == nil, session.preview?.showsMarkdown != true,
+               let edit = MarkdownEditing.indentList(in: textView.text, selection: textView.selectedRange, outdent: false) {
+                apply(edit)
+                return false
+            }
+            // At the end of a table, typing goes on the line after the table.
+            if range.length == 0, textView.markedTextRange == nil, let edit = session.preview?.redirectedInsert(text, at: range) {
+                apply(edit)
+                return false
+            }
+            // Backspace deletes the character before the caret.
+            if text.isEmpty, range.length > 0, textView.selectedRange.length == 0, textView.markedTextRange == nil,
+               let action = NSMaxRange(range) == textView.selectedRange.location
+                ? session.preview?.backspace(at: NSMaxRange(range))
+                : session.preview?.deleteForward(at: range.location) {
+                switch action {
+                case .normal: break
+                case .ignore: return false
+                case .edit(let edit):
+                    apply(edit)
+                    return false
+                }
+            }
             guard text == "\n", range.length == 0, textView.markedTextRange == nil,
-                  preview?.isInCodeBlock(range.location) != true,
+                  session.preview?.isInCodeBlock(range.location) != true,
                   let edit = MarkdownEditing.returnKeyEdit(in: textView.text, selection: range)
             else { return true }
             apply(edit)
@@ -369,15 +449,21 @@ private struct NoteTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            scheduleSave()
+            session.textDidChange()
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            preview?.selectionChanged(to: textView.selectedRange.location)
+            guard !session.isApplyingEdit, textView.markedTextRange == nil else { return }
+            // The caret never rests inside Markdown that is drawn as a checkbox or a table.
+            if let adjusted = session.preview?.adjustedSelection(to: textView.selectedRange) {
+                textView.selectedRange = adjusted
+                return
+            }
+            session.preview?.selectionChanged(to: textView.selectedRange)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            flushSave()
+            session.flushSave()
         }
     }
 }
@@ -389,6 +475,63 @@ private struct NoteTextView: UIViewRepresentable {
 /// A text view that passes clicks on a checklist box to the editor before it moves the caret.
 final class MarkdownNSTextView: NSTextView {
     var onCheckboxClick: ((CGPoint) -> Bool)?
+    /// Called with pasted pictures and files. Returns false when nothing took them, so the text view pastes normally.
+    var onPaste: (([PastedFile]) -> Bool)?
+    /// Called after every layout, so the editor can notice a change of width (a resized window).
+    var onLayout: (() -> Void)?
+    /// Called when the text view gains or loses the keyboard.
+    var onFocusChange: (() -> Void)?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        onFocusChange?()
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        onFocusChange?()
+        return result
+    }
+
+    override func paste(_ sender: Any?) {
+        // Text wins when the clipboard holds both, as when copying from a web page.
+        if NSPasteboard.general.string(forType: .string) == nil, let files = Self.pastedFiles(), !files.isEmpty,
+           onPaste?(files) == true { return }
+        super.paste(sender)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), onPaste != nil, NSPasteboard.general.string(forType: .string) == nil,
+           Self.pastedFiles()?.isEmpty == false { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    private static func pastedFiles() -> [PastedFile]? {
+        let board = NSPasteboard.general
+        let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let files = urls.compactMap { url -> PastedFile? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
+            return PastedFile(data: data, fileName: url.lastPathComponent, type: type)
+        }
+        if !files.isEmpty { return files }
+
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            guard let data = board.data(forType: type) else { continue }
+            if type == .png { return [PastedFile(data: data, fileName: "Pasted Image.png", type: .png)] }
+            // A screenshot or a copied picture often arrives as TIFF. PNG is smaller and understood everywhere.
+            if let bitmap = NSBitmapImageRep(data: data), let png = bitmap.representation(using: .png, properties: [:]) {
+                return [PastedFile(data: png, fileName: "Pasted Image.png", type: .png)]
+            }
+        }
+        return nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         if onCheckboxClick?(convert(event.locationInWindow, from: nil)) == true { return }
@@ -400,11 +543,14 @@ private struct NoteTextView: NSViewRepresentable {
     let note: Note
     let history: HistoryRecorder?
     let appearanceRevision: Int
+    @Environment(\.openURL) private var openURL
     let onKeptEdits: () -> Void
+    let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
+    var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history, commands: commands) }
 
     func makeNSView(context: Context) -> NSScrollView {
         // The same setup `NSTextView.scrollableTextView()` does, but with our own subclass.
@@ -428,6 +574,7 @@ private struct NoteTextView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.delegate = context.coordinator
+        context.coordinator.session.onSaveError = onSaveError
         context.coordinator.attach(to: textView)
         if let initialSelection {
             textView.setSelectedRange(NSRange(location: min(initialSelection, textView.string.utf16.count), length: 0))
@@ -436,172 +583,136 @@ private struct NoteTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.update(note: note)
-        context.coordinator.onKeptEdits = onKeptEdits
-        context.coordinator.applyAppearance(revision: appearanceRevision)
-        context.coordinator.refreshAttachmentsIfChanged()
+        context.coordinator.openURL = openURL
+        let session = context.coordinator.session
+        session.onSaveError = onSaveError
+        session.update(note: note)
+        session.onKeptEdits = onKeptEdits
+        session.onOpenAttachment = onOpenAttachment
+        session.applyAppearance(revision: appearanceRevision)
+        session.refreshAttachmentsIfChanged()
+        session.setShowsMarkdown(commands?.showsMarkdown ?? false)
         commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
         commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
-        coordinator.flushSave()
+        coordinator.session.flushSave()
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        private var note: Note
-        private weak var textView: NSTextView?
-        private var preview: LivePreviewController?
-        private lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
-        private var attachmentSignature = 0
-        private var saveTask: Task<Void, Never>?
+        let session: EditorSession
+        /// Opens a link that was tapped or clicked, the way the rest of the app does.
+        var openURL: OpenURLAction?
+        private weak var textView: MarkdownNSTextView?
+        private var tableOverlay: TableOverlay?
 
-        private let history: HistoryRecorder?
-
-        init(note: Note, history: HistoryRecorder?) {
-            self.history = history
-            self.note = note
+        init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
+            session = EditorSession(note: note, history: history, commands: commands)
         }
 
-        func attach(to textView: NSTextView) {
+        func attach(to textView: MarkdownNSTextView) {
             self.textView = textView
-            if let layoutManager = textView.textLayoutManager,
-               let contentStorage = layoutManager.textContentManager as? NSTextContentStorage {
-                preview = LivePreviewController(contentStorage: contentStorage, layoutManager: layoutManager)
-                preview?.attachmentProvider = { [weak self] in self?.catalog.display(for: $0) }
+            tableOverlay = TableOverlay(
+                container: textView,
+                origin: { [weak textView] in textView?.textContainerOrigin ?? .zero },
+                isFocused: { [weak textView] in textView?.window?.firstResponder === textView }
+            )
+            textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
+            textView.onLayout = { [weak self] in
+                self?.session.preview?.containerWidthMayHaveChanged()
+                self?.tableOverlay?.layoutDidChange()
             }
-            (textView as? MarkdownNSTextView)?.onCheckboxClick = { [weak self] point in self?.handleClick(at: point) ?? false }
-            load()
+            textView.onPaste = { [weak self] files in self?.session.paste(files) ?? false }
+            textView.onCheckboxClick = { [weak self] point in self?.handleClick(at: point) ?? false }
+
+            session.attach(
+                host: .init(
+                    text: { [weak textView] in textView?.string ?? "" },
+                    setText: { [weak textView] in textView?.string = $0 },
+                    selection: { [weak textView] in textView?.selectedRange() ?? NSRange(location: 0, length: 0) },
+                    isComposing: { [weak textView] in textView?.hasMarkedText() ?? false },
+                    applyEdit: { [weak self] in self?.replaceText($0) ?? false },
+                    undoManager: { [weak textView] in textView?.undoManager },
+                    applyFont: { [weak textView] in textView?.font = EditorTheme.proseFont },
+                    applyBodyStyle: { [weak self] in self?.applyBodyStyle() },
+                    focus: { [weak textView] in Task { @MainActor in textView?.window?.makeFirstResponder(textView) } }
+                ),
+                textLayoutManager: textView.textLayoutManager
+            )
+            tableOverlay?.connect(
+                to: session.preview,
+                apply: { [weak self] in self?.apply($0) },
+                placeCaret: { [weak textView] range in
+                    textView?.setSelectedRange(range)
+                    textView?.window?.makeFirstResponder(textView)
+                }
+            )
         }
 
-        private var appearanceRevision = AppearanceModel.shared.revision
-        /// The text last loaded into, or saved from, the editor. See `EditorSync`.
-        private var baseBody = ""
-        var onKeptEdits: (() -> Void)?
-
-        /// Re-styles the open note after a font, size, or theme change (Spec 11, S2).
-        func applyAppearance(revision: Int) {
-            guard revision != appearanceRevision, let textView else { return }
-            appearanceRevision = revision
-            textView.font = EditorTheme.proseFont
-            preview?.reload()
-        }
-
-        func update(note newNote: Note) {
+        /// Gives ordinary text the line spacing setting, including what is typed next on an empty line.
+        private func applyBodyStyle() {
             guard let textView else { return }
-            if newNote.id != note.id {
-                flushSave()
-                note = newNote
-                load()
-            } else {
-                followStoredNote(editorText: textView.string)
-            }
+            let style = EditorTheme.bodyParagraphStyle
+            textView.defaultParagraphStyle = style
+            textView.textStorage?.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
+            textView.typingAttributes[.paragraphStyle] = style
         }
 
-        /// The stored note may have changed under the editor (iCloud, Siri, Shortcuts). Never replace text the
-        /// user has typed, and never lose either side (Spec 06).
-        private func followStoredNote(editorText: String) {
-            switch EditorSync.decide(editorText: editorText, baseBody: baseBody, incomingBody: note.body) {
-            case .keepEditorText:
-                break
-            case .adoptIncoming:
-                // Keep the text that is about to be replaced (Spec 02, S2).
-                history?.record(noteID: note.id, body: editorText, reason: .beforeSyncUpdate, force: true)
-                load()
-            case .keepTypedTextAndSaveIncoming:
-                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
-                baseBody = note.body
-                onKeptEdits?()
-            }
-        }
+        // MARK: Clicks
 
-        private func load() {
-            guard let textView else { return }
-            textView.string = note.body
-            baseBody = note.body
-            preview?.reload()
-            if note.body.isEmpty {
-                DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
-            }
-        }
-
-        // MARK: Saving
-
-        /// Writes the editor's text to the note, but only if the user changed it. Saving unchanged text could
-        /// undo an outside change the editor has not shown yet. Text the editor never saw is kept as a version first.
-        private func saveIfTyped(_ text: String) {
-            guard text != baseBody else { return }
-            if EditorSync.unseenTextBeingOverwritten(editorText: text, baseBody: baseBody, storedBody: note.body) {
-                history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
-            }
-            note.setBody(text)
-            baseBody = note.body
-            history?.record(noteID: note.id, body: note.body, reason: .edit)
-        }
-
-        func flushSave() {
-            saveTask?.cancel()
-            guard let textView else { return }
-            saveIfTyped(textView.string)
-        }
-
-        private func scheduleSave() {
-            saveTask?.cancel()
-            saveTask = Task {
-                try? await Task.sleep(for: saveDelay)
-                guard !Task.isCancelled else { return }
-                flushSave()
-            }
-        }
-
-        // MARK: Formatting
-
-        /// A click on a checkbox toggles it, and a click on an attachment opens it. Returns true when the click was
+        /// A click on a checkbox toggles it, and a click on a link or an attachment opens it. Returns true when the click was
         /// one of those, so the caret does not move to that line.
         private func handleClick(at location: CGPoint) -> Bool {
             guard let textView else { return false }
             let origin = textView.textContainerOrigin
             let point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
-            if let id = preview?.attachmentID(at: point), let attachment = catalog.attachment(with: id) {
-                AttachmentOpener.open(attachment, from: textView)
+            if let url = session.preview?.linkURL(at: point) {
+                openURL?(url)
                 return true
             }
-            guard let line = preview?.checklistLine(at: point),
+            if let id = session.preview?.attachmentID(at: point), let attachment = session.catalog.attachment(with: id) {
+                if let range = session.preview?.attachmentSelection(for: id), textView.selectedRange() != range {
+                    textView.setSelectedRange(range)
+                    textView.window?.makeFirstResponder(textView)
+                } else {
+                    session.onOpenAttachment?(attachment)
+                }
+                return true
+            }
+            guard let line = session.preview?.checklistLine(at: point),
                   let edit = MarkdownEditing.toggleChecklist(in: textView.string, atLine: line, keepingSelection: textView.selectedRange())
             else { return false }
             apply(edit)
             return true
         }
 
+        // MARK: Formatting
+
         func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
             apply(MarkdownEditing.edit(command, in: textView.string, selection: textView.selectedRange()))
         }
-
-        // MARK: Attachments
 
         func insertBlock(_ markdown: String) {
             guard let textView else { return }
             apply(MarkdownEditing.insertBlock(markdown, in: textView.string, selection: textView.selectedRange()))
         }
 
-        /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.
-        func refreshAttachmentsIfChanged() {
-            let signature = catalog.signature
-            guard signature != attachmentSignature else { return }
-            attachmentSignature = signature
-            preview?.refreshAttachments()
-        }
+        private func apply(_ edit: TextEdit) { session.apply(edit) }
 
-        private func apply(_ edit: TextEdit) {
-            guard let textView else { return }
-            // `shouldChangeText` registers the change with the undo manager.
-            if textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) {
-                textView.textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
+        private func replaceText(_ edit: TextEdit) -> Bool {
+            guard let textView, let storage = textView.textStorage else { return false }
+            if (textView.string as NSString).substring(with: edit.range) != edit.replacement {
+                textView.breakUndoCoalescing()
+                guard textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) else { return false }
+                storage.replaceCharacters(in: edit.range, with: edit.replacement)
                 textView.didChangeText()
+                textView.breakUndoCoalescing()
             }
             textView.setSelectedRange(edit.selection)
+            return true
         }
 
         // MARK: NSTextViewDelegate
@@ -609,26 +720,72 @@ private struct NoteTextView: NSViewRepresentable {
         /// Return continues a list or checklist, and ends it on an empty item. Code blocks and text being
         /// composed keep the default behavior.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if !textView.hasMarkedText(), session.preview?.showsMarkdown != true,
+               commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)),
+               let edit = MarkdownEditing.indentList(in: textView.string, selection: textView.selectedRange(),
+                                                      outdent: commandSelector == #selector(NSResponder.insertBacktab(_:))) {
+                apply(edit)
+                return true
+            }
+            // At the end of a table, Return starts a line after the table.
+            if commandSelector == #selector(NSResponder.insertNewline(_:)), !textView.hasMarkedText(),
+               let edit = session.preview?.redirectedInsert("\n", at: textView.selectedRange()) {
+                apply(edit)
+                return true
+            }
+            let isBackward = commandSelector == #selector(NSResponder.deleteBackward(_:))
+            if isBackward || commandSelector == #selector(NSResponder.deleteForward(_:)), !textView.hasMarkedText(),
+               textView.selectedRange().length == 0,
+               let action = isBackward
+                ? session.preview?.backspace(at: textView.selectedRange().location)
+                : session.preview?.deleteForward(at: textView.selectedRange().location) {
+                switch action {
+                case .normal: break
+                case .ignore: return true
+                case .edit(let edit):
+                    apply(edit)
+                    return true
+                }
+            }
             guard commandSelector == #selector(NSResponder.insertNewline(_:)), !textView.hasMarkedText() else { return false }
             let selection = textView.selectedRange()
-            guard preview?.isInCodeBlock(selection.location) != true,
+            guard session.preview?.isInCodeBlock(selection.location) != true,
                   let edit = MarkdownEditing.returnKeyEdit(in: textView.string, selection: selection)
             else { return false }
             apply(edit)
             return true
         }
 
+        /// At the end of a table, typing goes on the line after the table.
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
+            guard !session.isApplyingEdit else { return true }
+            if text == " ", let id = session.preview?.attachmentID(in: range),
+               let attachment = session.catalog.attachment(with: id) {
+                session.onOpenAttachment?(attachment)
+                return false
+            }
+            guard let text, range.length == 0, !textView.hasMarkedText(),
+                  let edit = session.preview?.redirectedInsert(text, at: range) else { return true }
+            apply(edit)
+            return false
+        }
+
         func textDidChange(_ notification: Notification) {
-            scheduleSave()
+            session.textDidChange()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            preview?.selectionChanged(to: textView.selectedRange().location)
+            guard !session.isApplyingEdit, let textView = notification.object as? NSTextView, !textView.hasMarkedText() else { return }
+            // The caret never rests inside Markdown that is drawn as a checkbox or a table.
+            if let adjusted = session.preview?.adjustedSelection(to: textView.selectedRange()) {
+                textView.setSelectedRange(adjusted)
+                return
+            }
+            session.preview?.selectionChanged(to: textView.selectedRange())
         }
 
         func textDidEndEditing(_ notification: Notification) {
-            flushSave()
+            session.flushSave()
         }
     }
 }
@@ -816,4 +973,28 @@ private func previewPicture(width: Int, height: Int) -> Data {
     note.setBody(body)
     // The caret is on the empty line after the attachment, so the attachment line must show as a chip.
     return NoteEditor(note: note, initialSelection: (body as NSString).length).modelContainer(container)
+}
+
+#Preview("Bullets, quote, rule, link, wide table") {
+    let container = previewContainer()
+    let note = Note(body: """
+    # Polish
+
+    - First bullet
+    - Second bullet with a [link](https://example.com)
+    * Star bullet
+
+    > A quote that
+    > runs over two lines
+
+    ---
+
+    | Name | Quantity | Price per unit | Where it is stored | Notes |
+    | ---- | -------- | -------------- | ------------------ | ----- |
+    | Apples | 3 | 1.20 | Fridge, top shelf | fresh |
+
+    Back to text.
+    """)
+    container.mainContext.insert(note)
+    return NoteEditor(note: note).modelContainer(container)
 }

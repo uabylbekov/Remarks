@@ -8,6 +8,36 @@ struct InlineScannerTests {
     private func spans(_ text: String) -> [InlineSpan] { InlineScanner.spans(in: text) }
     private func substring(_ text: String, _ range: NSRange) -> String { (text as NSString).substring(with: range) }
 
+    @Test(arguments: [
+        #"\*literal\*"#, #"\**literal**"#, #"\_literal\_"#,
+        #"\~~literal~~"#, #"\`literal`"#, #"\[label](file)"#
+    ])
+    func escapedOpeningMarksStayLiteral(_ text: String) {
+        #expect(spans(text).isEmpty)
+    }
+
+    @Test func escapedClosingMarksDoNotCloseAStyle() {
+        #expect(spans(#"*literal\*"#).isEmpty)
+        #expect(spans(#"**literal\**"#).isEmpty)
+    }
+
+    @Test func pairedBackslashesDoNotEscapeTheFollowingMarker() {
+        #expect(spans(#"\\*italic*"#).map(\.kind) == [.italic])
+    }
+
+    @Test func linksKeepBalancedAndEscapedParentheses() {
+        let text = "😀 [site](https://example.com/a_(b_(c)))"
+        let found = spans(text)
+        #expect(found.count == 1)
+        #expect(found.first?.destination == "https://example.com/a_(b_(c))")
+        #expect(found.first.map { substring(text, $0.range) } == "[site](https://example.com/a_(b_(c)))")
+        #expect(spans(#"[site](https://example.com/a_\(b\))"#).first?.destination == "https://example.com/a_(b)")
+    }
+
+    @Test func anUnbalancedDestinationDoesNotBecomeAnExplicitLink() {
+        #expect(spans("[site](path_(missing)").isEmpty)
+    }
+
     @Test func findsBoldItalicStrikeAndCode() {
         let text = "a **bold** b _it_ c ~~gone~~ d `code`"
         let found = spans(text)
@@ -31,6 +61,28 @@ struct InlineScannerTests {
         #expect(span.map { substring(text, $0.content) } == "docs")
         let hidden = span?.markers.map { substring(text, $0) }
         #expect(hidden == ["[", "](https://x.dev)"])
+    }
+
+    @Test func tripleMarksAreBoldAndItalicWithNothingLeftOver() {
+        let text = "a ***both*** b"
+        let found = spans(text)
+        #expect(found.map(\.kind) == [.boldItalic])
+        #expect(found.first.map { substring(text, $0.content) } == "both")
+        #expect(found.first?.markers == [NSRange(location: 2, length: 3), NSRange(location: 9, length: 3)])
+    }
+
+    @Test func aBareAddressIsALinkWithoutTheSentencePunctuation() {
+        let text = "Visit https://example.com/a_b_c?x=1, then (https://x.dev)."
+        let found = spans(text)
+        #expect(found.map(\.kind) == [.link, .link])
+        #expect(found.compactMap(\.destination) == ["https://example.com/a_b_c?x=1", "https://x.dev"])
+        #expect(found.allSatisfy { $0.markers.isEmpty })
+    }
+
+    @Test func anAddressInsideACodeSpanOrAWrittenLinkIsNotLinkedTwice() {
+        #expect(spans("`https://a.dev`").map(\.kind) == [.code])
+        let text = "[https://a.dev](https://a.dev)"
+        #expect(spans(text).map(\.kind) == [.link])
     }
 
     @Test func imagesAreNotLinks() {

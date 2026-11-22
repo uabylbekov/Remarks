@@ -19,21 +19,22 @@ public struct CodeBlock: Equatable, Sendable {
 }
 
 public enum CodeBlockScanner {
-    /// Finds fenced blocks. A closing fence is a line made only of backticks, at least as long as the opener.
-    /// Known gaps (Spec 03): `~~~` fences and fences nested in lists or block quotes.
+    /// Finds backtick and tilde fences. Closers must use the same mark and at least the opening length.
+    /// Fences inside list and quote containers remain separate from this top-level scanner.
     public static func scan(_ text: String) -> [CodeBlock] {
         let source = text as NSString
         var blocks: [CodeBlock] = []
-        var opener: (line: NSRange, ticks: Int, language: String)?
+        var opener: (line: NSRange, ticks: Int, marker: Character, language: String)?
         var location = 0
 
         while location < source.length {
             let line = source.lineRange(for: NSRange(location: location, length: 0))
             let trimmed = source.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
-            let ticks = trimmed.prefix(while: { $0 == "`" }).count
+            let marker = trimmed.first ?? " "
+            let ticks = (marker == "`" || marker == "~") ? trimmed.prefix(while: { $0 == marker }).count : 0
 
             if let current = opener {
-                if ticks >= max(3, current.ticks), trimmed.count == ticks {
+                if marker == current.marker, ticks >= max(3, current.ticks), trimmed.count == ticks {
                     blocks.append(CodeBlock(
                         open: current.line,
                         close: line,
@@ -44,8 +45,9 @@ public enum CodeBlockScanner {
                 }
             } else if ticks >= 3 {
                 let info = trimmed.dropFirst(ticks).trimmingCharacters(in: .whitespaces)
-                let language = info.split(separator: " ").first.map { String($0).lowercased() } ?? ""
-                opener = (line, ticks, language)
+                if marker == "`", info.contains("`") { location = NSMaxRange(line); continue }
+                let language = info.split(whereSeparator: \.isWhitespace).first.map { String($0).lowercased() } ?? ""
+                opener = (line, ticks, marker, language)
             }
             location = NSMaxRange(line)
         }

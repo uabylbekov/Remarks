@@ -24,8 +24,17 @@ public enum NoteText {
                 insideFence.toggle()
                 continue
             }
-            // An attachment line reads as its name, not as a link with an id in it.
-            let text = insideFence ? line : (AttachmentLine.parse(line)?.label ?? strippingMarks(from: line))
+            let text: String
+            if insideFence {
+                text = line
+            } else if MarkdownEditing.isTableRow(line) {
+                // A table row reads as its cells. The separator row (`|---|---|`) says nothing.
+                guard !MarkdownEditing.isTableSeparator(line) else { continue }
+                text = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+            } else {
+                // An attachment line reads as its name, not as a link with an id in it.
+                text = AttachmentLine.parse(line)?.label ?? strippingInlineMarks(from: strippingMarks(from: line))
+            }
             guard !text.isEmpty else { continue }
 
             if title == nil {
@@ -37,6 +46,14 @@ public enum NoteText {
             if snippetLength >= maxSnippetLength { break }
         }
         return (title ?? "", String(snippetParts.joined(separator: " ").prefix(maxSnippetLength)))
+    }
+
+    /// The text of a line without the marks of bold, italic, strikethrough, code and links (a link keeps its label).
+    private static func strippingInlineMarks(from line: String) -> String {
+        let markers = InlineScanner.spans(in: line).flatMap(\.markers).sorted { $0.location > $1.location }
+        var result = line as NSString
+        for marker in markers { result = result.replacingCharacters(in: marker, with: "") as NSString }
+        return (result as String).trimmingCharacters(in: .whitespaces)
     }
 
     private static func strippingMarks(from line: String) -> String {

@@ -1,197 +1,6 @@
 import SwiftUI
 import NotesCore
 
-// MARK: - Layout fragments
-
-/// Draws the rounded background behind code block lines.
-///
-/// Where a line sits in its block (first row, last row) is asked of the controller at draw time instead of being stored
-/// in the text, so it can never go stale when lines are added or removed, and it never affects layout.
-final class CodeBlockFragment: NSTextLayoutFragment {
-    private static let cornerRadius: CGFloat = 10
-    /// Neighboring lines overlap by this much, so no hairline seam shows between them at fractional pixel positions.
-    private static let overlap: CGFloat = 0.75
-
-    weak var controller: LivePreviewController?
-
-    private var containerWidth: CGFloat {
-        textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
-    }
-
-    /// The card's top and bottom edges for this line, relative to the top of the fragment.
-    private func verticalExtent(of row: LivePreviewController.BlockRow) -> (top: CGFloat, bottom: CGFloat) {
-        let top = row.isFirst ? LivePreviewController.cardMargin : 0
-        guard row.isLast else { return (top, layoutFragmentFrame.height) }
-
-        // The text engine lays the empty line after a trailing newline out inside this fragment. It belongs to the
-        // card only when the block is still open, because that is the next line of code. After a closing fence it is
-        // an ordinary line below the card.
-        let lines = textLineFragments
-        let realLines = lines.filter { $0.characterRange.length > 0 }
-        let reference = (row.isUnclosed ? lines.last : realLines.last)
-        let lastBottom = reference.map { $0.typographicBounds.maxY } ?? layoutFragmentFrame.height
-        return (top, lastBottom + LivePreviewController.cardPadding)
-    }
-
-    // The background is wider than the text and can extend past it, so the rendering surface must include it.
-    override var renderingSurfaceBounds: CGRect {
-        let row = controller?.blockRow(for: textElement) ?? .init(isFirst: true, isLast: true, isUnclosed: false)
-        let extent = verticalExtent(of: row)
-        // The fragment's frame starts at the text's indent, but the background starts at the container edge.
-        return super.renderingSurfaceBounds.union(
-            CGRect(
-                x: -layoutFragmentFrame.minX,
-                y: min(0, extent.top) - Self.overlap,
-                width: containerWidth,
-                height: max(layoutFragmentFrame.height, extent.bottom) + 2 * Self.overlap
-            )
-        )
-    }
-
-    override func draw(at point: CGPoint, in context: CGContext) {
-        let row = controller?.blockRow(for: textElement) ?? .init(isFirst: true, isLast: true, isUnclosed: false)
-        let extent = verticalExtent(of: row)
-        let top = row.isFirst ? Self.cornerRadius : 0
-        let bottom = row.isLast ? Self.cornerRadius : 0
-        // Square edges that meet another line reach a little into it.
-        let extendUp = top > 0 ? 0 : Self.overlap
-        let extendDown = bottom > 0 ? 0 : Self.overlap
-        let rect = CGRect(
-            x: point.x - layoutFragmentFrame.minX,
-            y: point.y + extent.top - extendUp,
-            width: containerWidth,
-            height: extent.bottom - extent.top + extendUp + extendDown
-        )
-
-        context.saveGState()
-        context.setFillColor(EditorTheme.codeBackground.cgColor)
-        context.addPath(Self.path(for: rect, topRadius: top, bottomRadius: bottom))
-        context.fillPath()
-        context.restoreGState()
-        super.draw(at: point, in: context)
-    }
-
-    /// A rectangle with independent top and bottom corner radii. Y grows downward in both UIKit and AppKit text views.
-    static func path(for rect: CGRect, topRadius top: CGFloat, bottomRadius bottom: CGFloat) -> CGPath {
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: rect.minX + top, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY))
-        if top > 0 {
-            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + top), radius: top)
-        }
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottom))
-        if bottom > 0 {
-            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX - bottom, y: rect.maxY), radius: bottom)
-        }
-        path.addLine(to: CGPoint(x: rect.minX + bottom, y: rect.maxY))
-        if bottom > 0 {
-            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY - bottom), radius: bottom)
-        }
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + top))
-        if top > 0 {
-            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + top, y: rect.minY), radius: top)
-        }
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// Draws the rounded card behind a table row. Whether the row is the first or last of its table is asked of the
-/// controller at draw time, like `CodeBlockFragment`, so it can never go stale.
-final class TableFragment: NSTextLayoutFragment {
-    weak var controller: LivePreviewController?
-
-    private static let cornerRadius: CGFloat = 10
-    private static let overlap: CGFloat = 0.75
-
-    private var containerWidth: CGFloat {
-        textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
-    }
-
-    /// The card's bottom edge. The empty line after a trailing newline belongs below the table, not inside it.
-    private var bottomEdge: CGFloat {
-        let real = textLineFragments.filter { $0.characterRange.length > 0 }
-        return (real.last?.typographicBounds.maxY ?? layoutFragmentFrame.height) + LivePreviewController.tableRowPadding + 2
-    }
-
-    override var renderingSurfaceBounds: CGRect {
-        super.renderingSurfaceBounds.union(
-            CGRect(x: -layoutFragmentFrame.minX, y: -Self.overlap, width: containerWidth, height: max(layoutFragmentFrame.height, bottomEdge) + 2 * Self.overlap)
-        )
-    }
-
-    override func draw(at point: CGPoint, in context: CGContext) {
-        let row = controller?.tableRow(for: textElement) ?? (isFirst: true, isLast: true)
-        let top = row.isFirst ? Self.cornerRadius : 0
-        let bottom = row.isLast ? Self.cornerRadius : 0
-        let extendUp = row.isFirst ? 0 : Self.overlap
-        let extendDown = row.isLast ? 0 : Self.overlap
-        let height = row.isLast ? bottomEdge : layoutFragmentFrame.height
-        let rect = CGRect(
-            x: point.x - layoutFragmentFrame.minX,
-            y: point.y - extendUp,
-            width: containerWidth,
-            height: height + extendUp + extendDown
-        )
-
-        context.saveGState()
-        context.setFillColor(EditorTheme.codeBackground.cgColor)
-        context.addPath(CodeBlockFragment.path(for: rect, topRadius: top, bottomRadius: bottom))
-        context.fillPath()
-        context.restoreGState()
-        super.draw(at: point, in: context)
-    }
-}
-
-/// Draws a checkbox in the space of a checklist item's hidden `- [ ] ` mark.
-final class ChecklistFragment: NSTextLayoutFragment {
-    private func number(for key: NSAttributedString.Key) -> CGFloat {
-        let value = (textElement as? NSTextParagraph)?.attributedString.attribute(key, at: 0, effectiveRange: nil) as? NSNumber
-        return CGFloat(value?.doubleValue ?? 0)
-    }
-
-    override func draw(at point: CGPoint, in context: CGContext) {
-        super.draw(at: point, in: context)
-
-        let isChecked = number(for: LivePreviewController.checklistKey) == 2
-        let hiddenWidth = number(for: LivePreviewController.checklistWidthKey)
-        let indent = number(for: LivePreviewController.checklistIndentKey)
-        let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
-        let padding = textLayoutManager?.textContainer?.lineFragmentPadding ?? 5
-
-        // Leave a visible gap between the box and the text that follows.
-        let side = max(10, min(lineHeight * 0.62, hiddenWidth - 6))
-        let box = CGRect(
-            x: point.x - layoutFragmentFrame.minX + padding + indent,
-            y: point.y + (lineHeight - side) / 2,
-            width: side,
-            height: side
-        )
-
-        context.saveGState()
-        let outline = CGPath(roundedRect: box.insetBy(dx: 0.75, dy: 0.75), cornerWidth: 3.5, cornerHeight: 3.5, transform: nil)
-        if isChecked {
-            context.setFillColor(EditorTheme.accentColor.cgColor)
-            context.addPath(outline)
-            context.fillPath()
-            context.setStrokeColor(EditorColor.white.cgColor)
-            context.setLineWidth(1.8)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.move(to: CGPoint(x: box.minX + side * 0.25, y: box.minY + side * 0.53))
-            context.addLine(to: CGPoint(x: box.minX + side * 0.43, y: box.minY + side * 0.71))
-            context.addLine(to: CGPoint(x: box.minX + side * 0.76, y: box.minY + side * 0.30))
-            context.strokePath()
-        } else {
-            context.setStrokeColor(EditorColor.systemGray.cgColor)
-            context.setLineWidth(1.5)
-            context.addPath(outline)
-            context.strokePath()
-        }
-        context.restoreGState()
-    }
-}
-
 // MARK: - Live preview
 
 #if canImport(UIKit)
@@ -210,16 +19,18 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     static let checklistKey = NSAttributedString.Key("notes.checklist")          // 1 unchecked, 2 checked
     static let checklistWidthKey = NSAttributedString.Key("notes.checklistWidth")
     static let checklistIndentKey = NSAttributedString.Key("notes.checklistIndent")
-    /// Space above and below the text of every table row, inside the card.
-    static let tableRowPadding: CGFloat = 4
-    static let tableKey = NSAttributedString.Key("notes.table")
+    /// A destination on a link's text, so a tap or click can open it.
+    static let linkURLKey = NSAttributedString.Key("notes.linkURL")
+    /// Marks a line that has something drawn behind it: "quote" (a bar down the side) or "rule" (a horizontal line).
+    static let decorationKey = NSAttributedString.Key("notes.decoration")
     /// On the line of an attachment: the attachment id (a string) and the height reserved for it.
     static let attachmentKey = NSAttributedString.Key("notes.attachment")
     static let attachmentHeightKey = NSAttributedString.Key("notes.attachmentHeight")
 
-    private static let headingRegex = try? NSRegularExpression(pattern: "^(#{1,6})[ \\t]+")
-    private static let checklistRegex = try? NSRegularExpression(pattern: #"^([ \t]*)([-*+][ \t]+\[([ xX]?)\](?:[ \t]+|$))"#)
     static let codeInset: CGFloat = 12
+    /// The width to the right of a table's grid where the caret can rest at the end of the table. The grid leaves it free,
+    /// so a click there lands on the caret, and the caret is drawn as tall as the table.
+    static let tableGutter: CGFloat = 16
     /// Space inside the card above the opening fence row and below the closing fence row.
     static let cardPadding: CGFloat = 4
     /// Space outside the card, above and below it. Always the same, whatever the neighboring lines hold, so typing
@@ -227,8 +38,6 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     static let cardMargin: CGFloat = 6
     /// Space between the opening fence row (which shows the language when idle) and the first line of code.
     static let fenceGap: CGFloat = 6
-    /// Blocks longer than this are shown without syntax colors, so typing in a huge block stays smooth.
-    private static let highlightLimit = 60_000
 
     /// Where one line sits in its block. Asked at draw time (see `CodeBlockFragment`).
     struct BlockRow {
@@ -242,11 +51,43 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
 
     private weak var contentStorage: NSTextContentStorage?
     private weak var layoutManager: NSTextLayoutManager?
+    /// The document updates from each edit range. `blocks` is its fenced blocks, kept apart because
+    /// every line asks for them while it is styled.
+    private var document = MarkdownDocument("")
     private(set) var blocks: [CodeBlock] = []
-    private var caret = 0
+    /// The table blocks of the document, in order. A table is known by its position in this list.
+    private var tables: [MarkdownDocument.Block] = []
+    private var tableIDs: [UUID] = []
+    private(set) var tableIdentityRevision = 0
+    private var parsedText = ""
+    /// Each table read as a model, or nil when it is not a complete one. Cleared with the text it was read from.
+    private var tableModels: [Int: MarkdownTable?] = [:]
+    /// Whether Markdown marks are shown. Off, `#`, `**`, link addresses and the like are hidden once they have taken
+    /// effect, and the caret and Backspace treat them as part of the text beside them (see `adjustedSelection`).
+    var showsMarkdown = false {
+        didSet { if oldValue != showsMarkdown { reload() } }
+    }
+    /// The text version the caret was last placed for, so a caret that moved because of typing is told from one moved by
+    /// the arrow keys.
+    private var selectionVersion = 0
+    /// Called after styling changes, so a table's view can be placed again once the text has been laid out.
+    var onTablesChanged: (() -> Void)?
+    /// Writes a change to the text the way typing does, so undo, saving and history all see it.
+    var applyTableEdit: ((TextEdit) -> Void)?
+    /// Puts the caret in the text view, which also takes the keyboard back from a table.
+    var placeCaret: ((NSRange) -> Void)?
+    /// The caret came into a table, which is to put it in a cell: its index, then the row and column (-1 is the header).
+    var onEnterTable: ((Int, Int, Int) -> Void)?
+    /// What the text view has selected. A caret is a selection of length 0. Set only by `selectionChanged(to:)`.
+    private var selection = NSRange(location: 0, length: 0)
     /// Increases with every change to the text. Tokens are cached against it.
     private var version = 0
     private var tokenCache: [Int: [SyntaxToken]] = [:]
+    private var pendingRedraw: NSRange?
+    private var redrawScheduled = false
+    /// How each table is laid out, by the position of its first row, so every row of one table uses the same size and
+    /// column widths. Cleared with `tokenCache`, so it never outlives the text it was measured from.
+    private var tableLayouts: [Int: TableLayout] = [:]
 
     init(contentStorage: NSTextContentStorage, layoutManager: NSTextLayoutManager) {
         self.contentStorage = contentStorage
@@ -254,7 +95,7 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         super.init()
         contentStorage.delegate = self
         layoutManager.delegate = self
-        blocks = CodeBlockScanner.scan(contentStorage.textStorage?.string ?? "")
+        rescan(contentStorage.textStorage?.string ?? "")
 
         // Refresh the block list as the text changes, before the text engine lays the edited lines out. Doing it any
         // later styles them from a stale list, and then every line has to be styled again.
@@ -267,60 +108,224 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         guard editedMask.contains(.editedCharacters) else { return }
         let storage = textStorage
         version &+= 1
-        tokenCache.removeAll()
+        let previousBlocks = blocks
+        let previousTokens = tokenCache
+        tableLayouts.removeAll()
+        let redraw = rescan(storage.string, editedRange: editedRange, delta: delta) ?? editedRange
+        retainSyntaxTokens(previousTokens, blocks: previousBlocks, editedRange: editedRange, delta: delta)
+        onTablesChanged?()
 
-        let updated = CodeBlockScanner.scan(storage.string)
-        let changeStart = Self.firstStructuralChange(from: blocks, to: updated)
-        blocks = updated
-
-        // Typing inside a block, or anywhere else, only restyles the lines the text engine already refreshes. Only when
-        // a fence appears or disappears do the lines after it change what they are.
-        guard let changeStart else { return }
+        // Pending ranges were measured against the previous text. A second edit before this task runs
+        // conservatively redraws the document rather than applying stale offsets.
+        if pendingRedraw != nil {
+            pendingRedraw = NSRange(location: 0, length: storage.length)
+        } else {
+            pendingRedraw = redraw
+        }
+        guard !redrawScheduled else { return }
+        redrawScheduled = true
         Task { @MainActor [weak self] in
-            guard let self, let length = self.contentStorage?.textStorage?.length, changeStart < length else { return }
-            self.invalidate([NSRange(location: changeStart, length: length - changeStart)])
+            guard let self else { return }
+            self.redrawScheduled = false
+            guard let range = self.pendingRedraw else { return }
+            self.pendingRedraw = nil
+            self.invalidate([range])
         }
     }
 
-    /// Where the first block that is new, gone, or different (another language, opened or closed) begins.
-    private static func firstStructuralChange(from old: [CodeBlock], to new: [CodeBlock]) -> Int? {
-        for (before, after) in zip(old, new)
-        where before.language != after.language || (before.close == nil) != (after.close == nil) {
-            return min(before.open.location, after.open.location)
+    private func retainSyntaxTokens(_ previous: [Int: [SyntaxToken]], blocks oldBlocks: [CodeBlock],
+                                    editedRange: NSRange, delta: Int) {
+        tokenCache.removeAll()
+        let oldEnd = editedRange.location + editedRange.length - delta
+        for block in oldBlocks {
+            guard let tokens = previous[block.open.location] else { continue }
+            let shift: Int
+            if NSMaxRange(block.whole) <= editedRange.location {
+                shift = 0
+            } else if block.whole.location >= oldEnd {
+                shift = delta
+            } else {
+                continue
+            }
+            let range = NSRange(location: block.whole.location + shift, length: block.whole.length)
+            guard blocks.contains(where: { $0.whole == range && $0.language == block.language
+                && ($0.close?.location ?? -1) == (block.close.map { $0.location + shift } ?? -1) }) else { continue }
+            tokenCache[block.open.location + shift] = tokens.map {
+                SyntaxToken(scope: $0.scope, range: NSRange(location: $0.range.location + shift, length: $0.range.length))
+            }
         }
-        if old.count > new.count { return old[new.count].open.location }
-        if new.count > old.count { return new[old.count].open.location }
-        return nil
+    }
+
+    @discardableResult
+    private func rescan(_ text: String, editedRange: NSRange? = nil, delta: Int = 0) -> NSRange? {
+        let previousTables = tables
+        let previousIDs = tableIDs
+        let update = editedRange.map { document.updating(text, editedRange: $0, changeInLength: delta) }
+        document = update?.document ?? MarkdownDocument(text)
+        blocks = document.codeBlocks
+        tables = document.blocks.filter { if case .table = $0.kind { true } else { false } }
+        if editedRange != nil || text != parsedText {
+            let sameTables: Bool
+            if let editedRange {
+                let oldEditEnd = editedRange.location + editedRange.length - delta
+                let expectedRanges = previousTables.map { table -> NSRange? in
+                    let range = table.range
+                    if NSMaxRange(range) <= editedRange.location { return range }
+                    if range.location >= oldEditEnd {
+                        return NSRange(location: range.location + delta, length: range.length)
+                    }
+                    if range.location <= editedRange.location, NSMaxRange(range) >= oldEditEnd {
+                        return NSRange(location: range.location, length: range.length + delta)
+                    }
+                    return nil
+                }
+                sameTables = expectedRanges.count == tables.count
+                    && zip(expectedRanges, tables).allSatisfy { $0.0 == $0.1.range }
+            } else {
+                // A replacement whose correspondence is unknown must not reuse focused table hosts.
+                sameTables = false
+            }
+            if !sameTables { tableIdentityRevision &+= 1 }
+        }
+        if let editedRange {
+            let oldEnd = editedRange.location + editedRange.length - delta
+            var available = Set(previousTables.indices)
+            tableIDs = tables.map { table in
+                let match = available.first { index in
+                    let range = previousTables[index].range
+                    let expected: NSRange?
+                    if NSMaxRange(range) <= editedRange.location {
+                        expected = range
+                    } else if range.location >= oldEnd {
+                        expected = NSRange(location: range.location + delta, length: range.length)
+                    } else if range.location <= editedRange.location, NSMaxRange(range) >= oldEnd {
+                        expected = NSRange(location: range.location, length: range.length + delta)
+                    } else {
+                        expected = nil
+                    }
+                    return expected == table.range
+                }
+                if let match, previousIDs.indices.contains(match) {
+                    available.remove(match)
+                    return previousIDs[match]
+                }
+                return UUID()
+            }
+        } else if text != parsedText || tableIDs.count != tables.count {
+            // For replacements from sync, preserve only unambiguous, unchanged table contents.
+            let oldSource = parsedText as NSString
+            let newSource = text as NSString
+            let oldStrings = previousTables.map { oldSource.substring(with: $0.range) }
+            let newStrings = tables.map { newSource.substring(with: $0.range) }
+            tableIDs = newStrings.map { value in
+                if oldStrings.filter({ $0 == value }).count == 1,
+                   newStrings.filter({ $0 == value }).count == 1,
+                   let index = oldStrings.firstIndex(of: value), previousIDs.indices.contains(index) {
+                    return previousIDs[index]
+                }
+                return UUID()
+            }
+        }
+        parsedText = text
+        tableModels.removeAll()
+        return update?.redrawRange
+    }
+
+    /// All the rows of the table that `line` belongs to, or nil if the line is not a table row.
+    private func tableRun(containing line: NSRange, in source: NSString) -> NSRange? {
+        guard MarkdownEditing.isTableRow(source.substring(with: line)) else { return nil }
+        var start = line
+        var end = line
+        while start.location > 0 {
+            let previous = source.lineRange(for: NSRange(location: start.location - 1, length: 0))
+            guard MarkdownEditing.isTableRow(source.substring(with: previous)) else { break }
+            start = previous
+        }
+        while NSMaxRange(end) < source.length {
+            let next = source.lineRange(for: NSRange(location: NSMaxRange(end), length: 0))
+            guard MarkdownEditing.isTableRow(source.substring(with: next)) else { break }
+            end = next
+        }
+        return NSRange(location: start.location, length: NSMaxRange(end) - start.location)
     }
 
     /// Call after text is replaced programmatically (a different note, or a sync update), or when settings change.
     func reload() {
         guard let storage = contentStorage?.textStorage else { return }
         version &+= 1
+        // A note loaded or styled again is not an edit the caret has to catch up with.
+        selectionVersion = version
         tokenCache.removeAll()
-        blocks = CodeBlockScanner.scan(storage.string)
-        caret = min(caret, storage.length)
+        pendingRedraw = nil
+        tableLayouts.removeAll()
+        rescan(storage.string)
+        selection = clamped(selection, in: storage)
         invalidate([NSRange(location: 0, length: storage.length)])
     }
 
-    func selectionChanged(to location: Int) {
+    func selectionChanged(to range: NSRange) {
         guard let storage = contentStorage?.textStorage else { return }
-        let previous = caret
-        caret = min(location, storage.length)
-        guard previous != caret else { return }
+        // The ranges are measured against the text as it is now, so a deleted tail can never leave a stale one behind.
+        let previous = clamped(selection, in: storage)
+        selection = clamped(range, in: storage)
+        guard previous != selection else { return }
 
-        let oldLine = lineRange(at: previous, in: storage)
-        let newLine = lineRange(at: caret, in: storage)
-        let oldBlock = activeBlock(at: previous, in: storage)
-        let newBlock = activeBlock(at: caret, in: storage)
-        // Moving along the same line of the same block changes nothing that is shown.
-        if oldLine == newLine && oldBlock == newBlock { return }
-
-        var ranges = [oldLine, newLine]
-        if oldBlock != newBlock {
-            ranges += [oldBlock, newBlock].compactMap { $0?.whole }
+        // Only a few things look different with the caret on them (a rule, an attachment, a code block). Ordinary text,
+        // headings, lists and tables never do, so moving the caret through them styles nothing again.
+        let before = affectedRange(of: previous, in: storage)
+        let after = affectedRange(of: selection, in: storage)
+        var stale: [NSRange]
+        if previous.length > 0 || selection.length > 0 {
+            // A ranged selection changes what counts as active inside the part they share too (Select All makes the
+            // caret's own line inactive), so both are styled again.
+            stale = [before, after].compactMap { $0 }
+        } else if let before, let after {
+            // Between two carets, a line that both touch looks the same.
+            stale = Self.difference(between: before, and: after)
+        } else {
+            stale = [before, after].compactMap { $0 }
         }
-        invalidate(ranges)
+        if !stale.isEmpty { invalidate(stale) }
+        // The tall caret at the end of a table is a view of its own, which follows the selection.
+        if !tables.isEmpty { onTablesChanged?() }
+    }
+
+    private func clamped(_ range: NSRange, in storage: NSTextStorage) -> NSRange {
+        let location = min(range.location, storage.length)
+        return NSRange(location: location, length: min(range.length, storage.length - location))
+    }
+
+    /// The text whose look depends on this selection: a rule or an attachment on a line it touches, and every code block
+    /// it touches. Nil when nothing does.
+    private func affectedRange(of selection: NSRange, in storage: NSTextStorage) -> NSRange? {
+        var affected: NSRange?
+        func add(_ range: NSRange) { affected = affected.map { NSUnionRange($0, range) } ?? range }
+
+        let lines = lineRange(of: selection, in: storage)
+        for block in document.blocks where NSIntersectionRange(block.range, lines).length > 0 {
+            switch block.kind {
+            case .rule: add(block.range)
+            default: break
+            }
+        }
+        for block in blocks where isActive(block, selection: selection, in: storage) { add(block.whole) }
+        return affected
+    }
+
+    /// Whether `inner` lies entirely within `outer`.
+    private static func contains(_ outer: NSRange, _ inner: NSRange) -> Bool {
+        inner.location >= outer.location && NSMaxRange(inner) <= NSMaxRange(outer)
+    }
+
+    /// The parts of two ranges that are in one but not in the other.
+    private static func difference(between a: NSRange, and b: NSRange) -> [NSRange] {
+        guard NSIntersectionRange(a, b).length > 0 else { return [a, b] }
+        let lowStart = min(a.location, b.location), highStart = max(a.location, b.location)
+        let lowEnd = min(NSMaxRange(a), NSMaxRange(b)), highEnd = max(NSMaxRange(a), NSMaxRange(b))
+        return [
+            NSRange(location: lowStart, length: highStart - lowStart),
+            NSRange(location: lowEnd, length: highEnd - lowEnd),
+        ]
     }
 
     /// True when `location` is inside a fenced block. Return and list continuation must leave code alone.
@@ -329,20 +334,28 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return activeBlock(at: location, in: storage) != nil
     }
 
-    private func lineRange(at location: Int, in storage: NSTextStorage) -> NSRange {
+    /// The whole lines a selection touches. A caret after a final newline is on the empty line below it, not on the
+    /// line above (see `isLineActive`).
+    private func lineRange(of selection: NSRange, in storage: NSTextStorage) -> NSRange {
         let source = storage.string as NSString
         guard source.length > 0 else { return NSRange(location: 0, length: 0) }
-        return source.lineRange(for: NSRange(location: min(location, source.length - 1), length: 0))
+        if selection.length > 0 { return source.lineRange(for: selection) }
+        if selection.location >= source.length, source.character(at: source.length - 1) == 10 {
+            return NSRange(location: source.length, length: 0)
+        }
+        return source.lineRange(for: NSRange(location: min(selection.location, source.length - 1), length: 0))
     }
 
     /// Re-runs the paragraph delegate for these ranges without changing any characters.
     private func invalidate(_ ranges: [NSRange]) {
         guard let contentStorage, let storage = contentStorage.textStorage else { return }
         contentStorage.performEditingTransaction {
-            for range in ranges where range.length > 0 && NSMaxRange(range) <= storage.length {
-                storage.edited(.editedAttributes, range: range, changeInLength: 0)
+            for range in ranges {
+                let visible = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
+                if visible.length > 0 { storage.edited(.editedAttributes, range: visible, changeInLength: 0) }
             }
         }
+        onTablesChanged?()
     }
 
     // MARK: Active region
@@ -360,9 +373,21 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         }
     }
 
-    /// The caret is on this line. A caret at the very end of the text belongs to the last line, but not when that line
+    /// A block is active when the selection touches it, or the caret is in it.
+    private func isActive(_ block: CodeBlock, selection: NSRange, in storage: NSTextStorage) -> Bool {
+        // A selection that reaches beyond the block (Select All, or a drag across several lines) is not editing it.
+        if selection.length > 0 { return Self.contains(block.whole, selection) }
+        return activeBlock(at: selection.location, in: storage) == block
+    }
+
+    /// The selection touches this line. A caret at the very end of the text belongs to the last line, but not when that line
     /// ends with a newline: then the caret is on the empty line after it.
-    private func isLineActive(_ range: NSRange, in storage: NSTextStorage) -> Bool {
+    private func isLineActive(_ range: NSRange, in storage: NSTextStorage, selection given: NSRange? = nil) -> Bool {
+        let selection = given ?? self.selection
+        // Only a selection inside this line means it is being edited. One that spans lines (Select All) leaves every
+        // line as it looks at rest, so the checkboxes stay checkboxes.
+        if selection.length > 0 { return Self.contains(range, selection) }
+        let caret = selection.location
         let lineEnd = NSMaxRange(range)
         guard caret >= range.location else { return false }
         if caret < lineEnd { return true }
@@ -375,7 +400,10 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         guard let location = element?.elementRange?.location, let contentStorage,
               let storage = contentStorage.textStorage else { return nil }
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
-        guard let block = blocks.first(where: { NSLocationInRange(offset, $0.whole) }) else { return nil }
+        // A table row is drawn on the same card as a line of code, so both ask the same question.
+        guard let block = blocks.first(where: { NSLocationInRange(offset, $0.whole) }) else {
+            return tableRow(for: element).map { BlockRow(isFirst: $0.isFirst, isLast: $0.isLast, isUnclosed: false) }
+        }
 
         let lastLine: Int
         if let close = block.close {
@@ -391,112 +419,27 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     // MARK: NSTextContentStorageDelegate
 
     func textContentStorage(_ textContentStorage: NSTextContentStorage, textParagraphWith range: NSRange) -> NSTextParagraph? {
-        guard let storage = textContentStorage.textStorage, range.length > 0 else { return nil }
+        guard let storage = textContentStorage.textStorage, range.length > 0,
+              let block = document.block(at: range.location), NSLocationInRange(range.location, block.range) else { return nil }
         let paragraph = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
-        let full = NSRange(location: 0, length: paragraph.length)
-
-        if let block = blocks.first(where: { NSLocationInRange(range.location, $0.whole) }) {
-            styleCodeParagraph(paragraph, range: range, block: block, storage: storage)
+        if showsMarkdown {
+            paragraph.addAttributes([.font: EditorTheme.codeFont, .foregroundColor: EditorTheme.codeTextColor,
+                                     .paragraphStyle: EditorTheme.bodyParagraphStyle],
+                                    range: NSRange(location: 0, length: paragraph.length))
             return NSTextParagraph(attributedString: paragraph)
         }
-
-        let isActive = isLineActive(range, in: storage)
-
-        if MarkdownEditing.isTableRow(paragraph.string) {
-            styleTableRow(paragraph, range: range, storage: storage)
-            return NSTextParagraph(attributedString: paragraph)
-        }
-
-        if let line = AttachmentLine.parse(paragraph.string) {
-            styleAttachment(paragraph, line: line, isActive: isActive)
-            return NSTextParagraph(attributedString: paragraph)
-        }
-
-        var changed = false
-
-        if let match = Self.headingRegex?.firstMatch(in: paragraph.string, range: full) {
-            paragraph.addAttribute(.font, value: EditorTheme.headingFont(level: match.range(at: 1).length), range: full)
-            if !isActive { collapse(paragraph, range: match.range) }
-            changed = true
-        }
-
-        if let match = Self.checklistRegex?.firstMatch(in: paragraph.string, range: full) {
-            styleChecklist(paragraph, match: match, isActive: isActive)
-            changed = true
-        }
-
-        if styleInline(paragraph, hideMarkers: !isActive) { changed = true }
-
-        return changed ? NSTextParagraph(attributedString: paragraph) : nil
+        let line = ElementLine(range: range, block: block, isActive: isLineActive(range, in: storage))
+        // The document says what kind of line this is, and that kind's element says how it looks.
+        let element = MarkdownElements.element(for: block.kind)
+        return element.style(paragraph, line: line, services: self) ? NSTextParagraph(attributedString: paragraph) : nil
     }
 
     // MARK: Code blocks
 
-    /// Layout depends only on what a line is (an opening fence, a closing fence, or code), never on where the caret is,
-    /// what the neighboring lines hold, or whether it is the last line. Those change while typing, and anything that
-    /// depended on them would move the text under the caret. Caret position changes colors only.
-    private func styleCodeParagraph(_ paragraph: NSMutableAttributedString, range: NSRange, block: CodeBlock, storage: NSTextStorage) {
-        let full = NSRange(location: 0, length: paragraph.length)
-        let isOpen = range.location == block.open.location
-        let isClose = block.close.map { range.location == $0.location } ?? false
-        let isFence = isOpen || isClose
-        let isActive = activeBlock(at: caret, in: storage) == block
-
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = Self.codeInset
-        style.headIndent = Self.codeInset
-        style.tailIndent = -Self.codeInset
-        style.paragraphSpacingBefore = isOpen ? Self.cardMargin + Self.cardPadding : 0
-        style.paragraphSpacing = isOpen ? Self.fenceGap : (isClose ? Self.cardPadding + Self.cardMargin : 0)
-
-        paragraph.addAttribute(.font, value: EditorTheme.codeFont, range: full)
-        paragraph.addAttribute(.paragraphStyle, value: style, range: full)
-        paragraph.addAttribute(Self.blockMarkerKey, value: 1, range: full)
-
-        if isFence {
-            // The same small text in both states. While idle, the backticks are invisible but still take their
-            // room, so the language stays exactly where it is and only the backticks appear when editing.
-            let small = EditorFont.monospacedSystemFont(ofSize: EditorTheme.codeFont.pointSize * 0.8, weight: .regular)
-            paragraph.addAttributes([.font: small, .foregroundColor: EditorTheme.dimColor], range: full)
-            if !isActive {
-                let text = paragraph.string as NSString
-                var markerEnd = 0
-                while markerEnd < text.length, [32, 9, 96, 126].contains(text.character(at: markerEnd)) { markerEnd += 1 }
-                // An opening fence keeps its language visible. A closing fence is hidden entirely.
-                let hidden = isOpen && !block.language.isEmpty ? NSRange(location: 0, length: markerEnd) : full
-                paragraph.addAttribute(.foregroundColor, value: EditorColor.clear, range: hidden)
-            }
-        } else {
-            paragraph.addAttribute(.foregroundColor, value: EditorTheme.codeTextColor, range: full)
-            applySyntaxColors(to: paragraph, range: range, block: block, storage: storage)
-        }
-    }
-
-    /// Colors come from the display layer, so the stored text is never touched and typing never triggers a rewrite.
-    private func applySyntaxColors(to paragraph: NSMutableAttributedString, range: NSRange, block: CodeBlock, storage: NSTextStorage) {
-        let tokens = syntaxTokens(for: block, in: storage)
-        // Tokens are sorted by position, so find the first one that can reach this line and stop at the first past it.
-        var low = 0, high = tokens.count
-        while low < high {
-            let middle = (low + high) / 2
-            if NSMaxRange(tokens[middle].range) > range.location { high = middle } else { low = middle + 1 }
-        }
-        for token in tokens[low...] {
-            if token.range.location >= NSMaxRange(range) { break }
-            let overlap = NSIntersectionRange(token.range, range)
-            guard overlap.length > 0 else { continue }
-            paragraph.addAttribute(
-                .foregroundColor,
-                value: EditorTheme.color(for: token.scope),
-                range: NSRange(location: overlap.location - range.location, length: overlap.length)
-            )
-        }
-    }
-
     private func syntaxTokens(for block: CodeBlock, in storage: NSTextStorage) -> [SyntaxToken] {
         if let cached = tokenCache[block.open.location] { return cached }
         var tokens: [SyntaxToken] = []
-        if block.body.length > 0, block.body.length <= Self.highlightLimit,
+        if block.body.length > 0, block.body.length <= CodeBlockElement.highlightLimit,
            let engine = SyntaxGrammars.engine(forLanguage: block.language) {
             tokens = engine.tokens(in: storage.string, range: block.body).sorted { $0.range.location < $1.range.location }
         }
@@ -504,39 +447,360 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return tokens
     }
 
-    // MARK: Tables
-
-    /// A table row is shown in the code font, so the columns line up, on the card color. The header row (the one
-    /// above the separator) is bold, and the separator row and the pipes are dim. Nothing here depends on the caret.
-    private func styleTableRow(_ paragraph: NSMutableAttributedString, range: NSRange, storage: NSTextStorage) {
-        let text = paragraph.string
-        let content = NSRange(location: 0, length: (text as NSString).length - (text.hasSuffix("\n") ? 1 : 0))
-        guard content.length > 0 else { return }
-
-        let isSeparator = MarkdownEditing.isTableSeparator(text)
-        let isHeader = !isSeparator && nextLineIsTableSeparator(after: range, in: storage)
-        let font = isHeader ? EditorTheme.traited(EditorTheme.codeFont, bold: true) : EditorTheme.codeFont
-
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = Self.codeInset
-        style.headIndent = Self.codeInset
-        style.tailIndent = -Self.codeInset
-        style.paragraphSpacingBefore = Self.tableRowPadding
-        style.paragraphSpacing = Self.tableRowPadding
-        style.lineBreakMode = .byClipping
-        paragraph.addAttributes([
-            .font: font,
-            .foregroundColor: isSeparator ? EditorTheme.dimColor : EditorTheme.codeTextColor,
-            .paragraphStyle: style,
-            Self.tableKey: 1,
-        ], range: NSRange(location: 0, length: paragraph.length))
-
-        // The pipes recede, so the cells read first.
-        let source = text as NSString
-        for index in 0..<content.length where source.character(at: index) == 124 {
-            paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: NSRange(location: index, length: 1))
-        }
+    func tableID(at index: Int) -> UUID? {
+        tableIDs.indices.contains(index) ? tableIDs[index] : nil
     }
+
+    func tableIndex(for id: UUID) -> Int? { tableIDs.firstIndex(of: id) }
+
+    // MARK: Table grids
+
+    /// What the table view needs to be placed: which table, what it holds, and where it goes (text container coordinates).
+    struct GridTable {
+        let id: UUID
+        let index: Int
+        let table: MarkdownTable
+        let frame: CGRect
+    }
+
+    private func tableModel(at index: Int, in storage: NSTextStorage) -> MarkdownTable? {
+        if let known = tableModels[index] { return known }
+        let model = MarkdownTable(parsing: (storage.string as NSString).substring(with: tables[index].range))
+        tableModels[index] = .some(model)
+        return model
+    }
+
+    /// The table that a line belongs to, when it is shown as a grid. That is every complete table, whatever the caret
+    /// does: the rows are never shown as text. A table without a separator row is not complete, and stays text.
+    private func gridTable(at offset: Int, in storage: NSTextStorage) -> (index: Int, block: MarkdownDocument.Block, table: MarkdownTable)? {
+        guard !showsMarkdown, let index = tables.firstIndex(where: { NSLocationInRange(offset, $0.range) }),
+              let table = tableModel(at: index, in: storage) else { return nil }
+        return (index, tables[index], table)
+    }
+
+    /// Where each grid table goes. Only tables shown as grids are listed. A table whose text has not been laid out is left
+    /// out, unless `forcingLayout` asks for it to be laid out now. The text view lays out a screenful at a time, and
+    /// asking for layout from inside its own layout pass is not allowed, so the overlay places what is already there, in
+    /// the same pass, and the table moves with the text.
+    func gridTables(forcingLayout: Bool = false) -> [GridTable] {
+        guard let layoutManager, let contentStorage, let storage = contentStorage.textStorage,
+              let container = layoutManager.textContainer else { return [] }
+        let padding = container.lineFragmentPadding
+        var result: [GridTable] = []
+        for index in tables.indices {
+            guard let grid = gridTable(at: tables[index].range.location, in: storage),
+                  let location = contentStorage.location(contentStorage.documentRange.location, offsetBy: tables[index].range.location)
+            else { continue }
+            let fragment: NSTextLayoutFragment?
+            if forcingLayout {
+                fragment = layoutManager.textLayoutFragment(for: location)
+            } else {
+                var found: NSTextLayoutFragment?
+                layoutManager.enumerateTextLayoutFragments(from: location, options: []) { candidate in
+                    if candidate.rangeInElement.location.compare(location) == .orderedSame, candidate.state == .layoutAvailable {
+                        found = candidate
+                    }
+                    return false
+                }
+                fragment = found
+            }
+            guard let fragment else { continue }
+            let frame = CGRect(
+                x: padding,
+                y: fragment.layoutFragmentFrame.minY + Self.cardMargin,
+                width: TableGridView.width(for: grid.table, in: container.size.width, padding: padding, gutter: Self.tableGutter),
+                height: TableGridView.height(for: grid.table)
+            )
+            result.append(GridTable(id: tableIDs[index], index: index, table: grid.table, frame: frame))
+        }
+        return result
+    }
+
+    /// Writes a changed table back into the text. The caret stays where it was, outside the table, so the table keeps
+    /// showing as a grid while it is being edited.
+    func replaceTable(at index: Int, with table: MarkdownTable) {
+        guard tables.indices.contains(index), let storage = contentStorage?.textStorage else { return }
+        var range = tables[index].range
+        // The last row's line break belongs to the line after the table, not to the table.
+        let source = storage.string as NSString
+        while range.length > 0, [10, 13].contains(source.character(at: NSMaxRange(range) - 1)) { range.length -= 1 }
+
+        let replacement = table.markdown()
+        var caret = clamped(selection, in: storage)
+        if caret.location >= NSMaxRange(range) { caret.location += (replacement as NSString).length - range.length }
+        applyTableEdit?(TextEdit(range: range, replacement: replacement, selection: caret))
+    }
+
+    // MARK: Hidden Markdown
+
+    /// The marks on a line that are hidden: the `#` of a heading, the `>` of a quote, the `- [ ] ` in front of a
+    /// checkbox, and the marks around bold, italic, code and links. Nothing is hidden while Markdown is shown.
+    private func hiddenRanges(inLine line: NSRange, in storage: NSTextStorage) -> [NSRange] {
+        guard !showsMarkdown, line.length > 0, let block = document.block(at: line.location),
+              NSLocationInRange(line.location, block.range) else { return [] }
+        let element = MarkdownElements.element(for: block.kind)
+        var hidden = element.hiddenMarks(of: block, line: line, in: storage.string as NSString)
+        if element.readsInline {
+            let text = (storage.string as NSString).substring(with: line)
+            for span in InlineScanner.spans(in: text) {
+                for marker in span.markers {
+                    hidden.append(NSRange(location: line.location + marker.location, length: marker.length))
+                }
+            }
+        }
+        return hidden
+    }
+
+    /// The positions that look the same, because only hidden characters lie between them. A caret anywhere in one is
+    /// drawn in the same place, so they count as one position.
+    private func visualClass(containing position: Int, hidden: [NSRange]) -> NSRange {
+        var low = position, high = position
+        var grew = true
+        while grew {
+            grew = false
+            for range in hidden where range.location <= high && NSMaxRange(range) >= low {
+                if range.location < low { low = range.location; grew = true }
+                if NSMaxRange(range) > high { high = NSMaxRange(range); grew = true }
+            }
+        }
+        return NSRange(location: low, length: high - low)
+    }
+
+    private func composedLength(at location: Int, in source: NSString) -> Int {
+        location < source.length ? source.rangeOfComposedCharacterSequence(at: location).length : 0
+    }
+
+    private func composedLength(before location: Int, in source: NSString) -> Int {
+        location > 0 ? source.rangeOfComposedCharacterSequence(at: location - 1).length : 0
+    }
+
+    /// The caret must not rest in Markdown that cannot be seen: a hidden mark, the rows of a table. It always sits just
+    /// before a visible character, so what is typed takes that character's style. Returns where it goes instead, or nil
+    /// when it is fine where it is. An arrow key that would move the caret from one place to where it already looks to
+    /// be steps over the hidden mark and one visible character, so no key press seems to do nothing.
+    func adjustedSelection(to new: NSRange) -> NSRange? {
+        guard !showsMarkdown, new.length == 0, let storage = contentStorage?.textStorage else { return nil }
+        let source = storage.string as NSString
+        let caret = min(new.location, source.length)
+        let edited = version != selectionVersion
+        selectionVersion = version
+
+        // The end of the text belongs to the last block, but a caret on the empty line after a table's line break is
+        // below the table, not in it.
+        if let block = document.block(at: caret), case .table = block.kind {
+            let end = NSMaxRange(block.range)
+            let isInside = caret < end || (caret == end && end > 0 && source.character(at: end - 1) != 10)
+            let restingPlace = tableCaretPosition(of: block, in: source)
+            if caret == restingPlace { return nil }
+            // Anywhere in the first row after its first character is the end of the table: a click beside the grid can land
+            // there. Left from the end of the table goes into the last cell.
+            if caret > block.range.location, caret < restingPlace {
+                let previous = clamped(selection, in: storage)
+                if !edited, previous.length == 0, previous.location == restingPlace,
+                   let index = tables.firstIndex(where: { $0.range == block.range }),
+                   let table = tableModel(at: index, in: storage) {
+                    onEnterTable?(index, table.rows.count - 1, table.columnCount - 1)
+                    return previous
+                }
+                return NSRange(location: restingPlace, length: 0)
+            }
+            if isInside {
+                // Down from the caret at the end of a table leaves the table, as it would past any other block.
+                if !edited, selection.length == 0, selection.location == restingPlace, caret > selection.location {
+                    if end == source.length, end > 0, source.character(at: end - 1) != 10 {
+                        Task { @MainActor [weak self] in self?.ensureLineAfterTable() }
+                        return selection
+                    }
+                    return NSRange(location: end, length: 0)
+                }
+                // The caret at the very end of a note that ends with a table is below the table, not in it: the click or
+                // the key was for the place after it. There is no line there yet, so one is added.
+                if caret == source.length, end == source.length, caret > 0, source.character(at: end - 1) != 10 {
+                    Task { @MainActor [weak self] in self?.ensureLineAfterTable() }
+                    return nil
+                }
+                // An arrow key or a click that brings the caret into a table puts it in a cell instead, and the text view's
+                // own caret stays where it was. The way in decides which cell: down gets the first, up the last.
+                let previous = clamped(selection, in: storage)
+                if !edited, caret != previous.location, previous.length == 0,
+                   let index = tables.firstIndex(where: { $0.range == block.range }),
+                   let table = tableModel(at: index, in: storage) {
+                    let entersFromAbove = caret >= previous.location
+                    onEnterTable?(index, entersFromAbove ? -1 : table.rows.count - 1, entersFromAbove ? 0 : table.columnCount - 1)
+                    return previous
+                }
+                if caret >= selection.location || block.range.location == 0 {
+                    // A table that ends the text has no line after it to put the caret on, so one is added. Not now:
+                    // this runs while the text view is still working on the change that moved the caret.
+                    if end == source.length, source.character(at: end - 1) != 10 {
+                        Task { @MainActor [weak self] in self?.ensureLineAfterTable() }
+                        return nil
+                    }
+                    return end == caret ? nil : NSRange(location: end, length: 0)
+                }
+                return NSRange(location: block.range.location - 1, length: 0)
+            }
+        }
+
+        let line = source.lineRange(for: NSRange(location: caret, length: 0))
+        let hidden = hiddenRanges(inLine: line, in: storage)
+        guard !hidden.isEmpty else { return nil }
+        let spot = visualClass(containing: caret, hidden: hidden)
+        guard spot.length > 0 else { return nil }
+
+        var target = NSMaxRange(spot)
+        let previous = selection.location
+        if !edited, caret != previous, spot == visualClass(containing: previous, hidden: hidden) {
+            if caret > previous {
+                target += composedLength(at: target, in: source)
+            } else if spot.location > 0 {
+                target = spot.location - composedLength(before: spot.location, in: source)
+            }
+        }
+        return target == caret ? nil : NSRange(location: target, length: 0)
+    }
+
+    /// The table the caret rests at the end of, if any.
+    var tableWithCaret: Int? {
+        guard !showsMarkdown else { return nil }
+        guard selection.length == 0, let storage = contentStorage?.textStorage else { return nil }
+        let source = storage.string as NSString
+        return tables.firstIndex { tableCaretPosition(of: $0, in: source) == selection.location }
+    }
+
+    /// Where the caret rests "at the end of a table": the end of its first row, which is drawn at the right edge, in the
+    /// gutter beside the grid, as tall as the table (see `TableElement`). It is the one place in a table where the caret
+    /// may rest.
+    private func tableCaretPosition(of block: MarkdownDocument.Block, in source: NSString) -> Int {
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: source.lineRange(for: NSRange(location: block.range.location, length: 0)))
+        return contentsEnd
+    }
+
+    /// The caret is at the end of a table, and something is typed. It goes on the line after the table, not into the
+    /// table's first row: a new line is made for it if the next one has text. Returns nil when the caret is elsewhere.
+    func redirectedInsert(_ text: String, at selection: NSRange) -> TextEdit? {
+        guard !showsMarkdown, !text.isEmpty, selection.length == 0, let storage = contentStorage?.textStorage,
+              let block = document.block(at: selection.location), case .table = block.kind else { return nil }
+        let source = storage.string as NSString
+        guard selection.location == tableCaretPosition(of: block, in: source) else { return nil }
+
+        let end = NSMaxRange(block.range)
+        let length = (text as NSString).length
+        // A table that ends the text has no line after it yet.
+        if end == source.length, end > 0, source.character(at: end - 1) != 10 {
+            return TextEdit(range: NSRange(location: end, length: 0), replacement: "\n" + text, selection: NSRange(location: end + 1 + length, length: 0))
+        }
+        if text == "\n" {
+            return TextEdit(range: NSRange(location: end, length: 0), replacement: "\n", selection: NSRange(location: end, length: 0))
+        }
+        let nextLineHasText = end < source.length && source.character(at: end) != 10
+        return TextEdit(
+            range: NSRange(location: end, length: 0),
+            replacement: nextLineHasText ? text + "\n" : text,
+            selection: NSRange(location: end + length, length: 0)
+        )
+    }
+
+    /// Gives a table that ends the text a line below it, for the caret.
+    private func ensureLineAfterTable() {
+        guard !showsMarkdown else { return }
+        guard let storage = contentStorage?.textStorage, let table = tables.last else { return }
+        let source = storage.string as NSString
+        let end = NSMaxRange(table.range)
+        guard end == source.length, end > 0, source.character(at: end - 1) != 10 else { return }
+        applyTableEdit?(TextEdit(range: NSRange(location: end, length: 0), replacement: "\n", selection: NSRange(location: end + 1, length: 0)))
+    }
+
+    enum BackspaceAction {
+        /// Nothing special: the text view deletes as usual.
+        case normal
+        /// Do nothing, because there is nothing to delete.
+        case ignore
+        case edit(TextEdit)
+    }
+
+    /// The mark in front of a line that Backspace takes away to turn the line back into plain text.
+    private func linePrefixMark(of block: MarkdownDocument.Block, in source: NSString) -> NSRange? {
+        MarkdownElements.element(for: block.kind).prefixMark(of: block, in: source)
+    }
+
+    /// What Backspace does with the caret at `caret`. It deletes the visible character before the caret, never a hidden
+    /// mark. At the start of a heading, quote or checklist item it takes the mark away and keeps the text. At the start
+    /// of the line after a table it removes the table, because joining that line to the last row would break it.
+    func backspace(at caret: Int) -> BackspaceAction {
+        guard !showsMarkdown else { return .normal }
+        guard let storage = contentStorage?.textStorage else { return .normal }
+        let source = storage.string as NSString
+
+        // Backspace from the end of a table, or from the line after it, removes the table, as one step that undo brings back.
+        for block in tables where (caret == NSMaxRange(block.range) && caret > 0) || caret == tableCaretPosition(of: block, in: source) {
+            return .edit(TextEdit(range: block.range, replacement: "", selection: NSRange(location: block.range.location, length: 0)))
+        }
+
+        let line = source.lineRange(for: NSRange(location: caret, length: 0))
+        let spot = visualClass(containing: caret, hidden: hiddenRanges(inLine: line, in: storage))
+        guard spot.length > 0 else { return .normal }
+
+        if spot.location == line.location {
+            if let block = document.block(at: line.location), let mark = linePrefixMark(of: block, in: source) {
+                return .edit(TextEdit(range: mark, replacement: "", selection: NSRange(location: mark.location, length: 0)))
+            }
+            guard spot.location > 0 else { return .ignore }
+        }
+        let length = composedLength(before: spot.location, in: source)
+        let range = NSRange(location: spot.location - length, length: length)
+        return .edit(TextEdit(range: range, replacement: "", selection: NSRange(location: range.location, length: 0)))
+    }
+
+    /// What the forward delete key does: it deletes the visible character after the caret, stepping over hidden marks.
+    func deleteForward(at caret: Int) -> BackspaceAction {
+        guard !showsMarkdown else { return .normal }
+        guard let storage = contentStorage?.textStorage else { return .normal }
+        let source = storage.string as NSString
+        let line = source.lineRange(for: NSRange(location: caret, length: 0))
+
+        // At the end of a table there is nothing after the caret to delete.
+        if tables.contains(where: { caret == tableCaretPosition(of: $0, in: source) }) { return .ignore }
+
+        // Forward delete at the end of the line above a table removes the table, as joining it would break it.
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: line)
+        if caret == contentsEnd, contentsEnd > line.location, let table = tables.first(where: { $0.range.location == NSMaxRange(line) }) {
+            return .edit(TextEdit(range: table.range, replacement: "", selection: NSRange(location: caret, length: 0)))
+        }
+
+        let spot = visualClass(containing: caret, hidden: hiddenRanges(inLine: line, in: storage))
+        guard spot.length > 0 else { return .normal }
+
+        let end = NSMaxRange(spot)
+        let length = composedLength(at: end, in: source)
+        guard length > 0 else { return .ignore }
+        return .edit(TextEdit(range: NSRange(location: end, length: length), replacement: "", selection: NSRange(location: end, length: 0)))
+    }
+
+    /// The caret leaves a table with the keyboard: it goes to the end of the line above, or to the line below.
+    func exitTable(at index: Int, toward exit: TableExit) {
+        guard tables.indices.contains(index), let storage = contentStorage?.textStorage else { return }
+        let source = storage.string as NSString
+        let block = tables[index]
+        let end = NSMaxRange(block.range)
+
+        // Out of the top goes to the line above. Out of the bottom goes to the end of the table, the tall caret in the gutter,
+        // from where Down goes on to the line below.
+        var location = tableCaretPosition(of: block, in: source)
+        if exit == .before, block.range.location > 0 { location = block.range.location - 1 }
+        placeCaret?(NSRange(location: location, length: 0))
+    }
+
+    /// Removes a table and its line break.
+    func deleteTable(at index: Int) {
+        guard tables.indices.contains(index) else { return }
+        let range = tables[index].range
+        applyTableEdit?(TextEdit(range: range, replacement: "", selection: NSRange(location: range.location, length: 0)))
+    }
+
+    // MARK: Tables
 
     /// Where the table row that starts a layout element sits in its table, or nil if it is not in one.
     func tableRow(for element: NSTextElement?) -> (isFirst: Bool, isLast: Bool)? {
@@ -561,6 +825,39 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return (isFirst, isLast)
     }
 
+    private struct TableLayout {
+        /// The rows of the table.
+        let run: NSRange
+        /// How much smaller than normal the text must be to fit the width, never below 60%.
+        let scale: CGFloat
+    }
+
+    /// How much smaller than normal the table's text must be to fit the width. The widest row decides, so all rows
+    /// share one size and the columns stay lined up. An edit or a new width styles the whole table again (see
+    /// `textStorage(_:didProcessEditing:...)` and `containerWidthMayHaveChanged`), which keeps this cache fresh.
+    private func tableLayout(forRowAt range: NSRange, in storage: NSTextStorage) -> TableLayout {
+        let source = storage.string as NSString
+        let line = source.lineRange(for: NSRange(location: range.location, length: 0))
+        guard let run = tableRun(containing: line, in: source) else { return TableLayout(run: line, scale: 1) }
+        if let known = tableLayouts[run.location] { return known }
+
+        let padding = layoutManager?.textContainer?.lineFragmentPadding ?? 5
+        let available = (layoutManager?.textContainer?.size.width ?? 0) - 2 * Self.codeInset - 2 * padding
+        var scale: CGFloat = 1
+        if available > 0 {
+            var widest: CGFloat = 0
+            source.enumerateSubstrings(in: run, options: .byLines) { row, _, _, _ in
+                guard let row else { return }
+                widest = max(widest, (row as NSString).size(withAttributes: [.font: EditorTheme.codeFont]).width)
+            }
+            if widest > available { scale = max(0.6, available / widest) }
+        }
+
+        let layout = TableLayout(run: run, scale: scale)
+        tableLayouts[run.location] = layout
+        return layout
+    }
+
     private func nextLineIsTableSeparator(after range: NSRange, in storage: NSTextStorage) -> Bool {
         let source = storage.string as NSString
         let next = NSMaxRange(range)
@@ -570,48 +867,32 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
 
     // MARK: Attachments
 
-    /// The tallest a picture is drawn, in points.
-    private static let maxImageHeight: CGFloat = 280
+    func attachmentSelection(for id: UUID) -> NSRange? {
+        guard !showsMarkdown, let storage = contentStorage?.textStorage,
+              let block = document.blocks.first(where: {
+                  if case .attachment(let attachment) = $0.kind { attachment.id == id } else { false }
+              }) else { return nil }
+        let source = storage.string as NSString
+        var end = NSMaxRange(block.range)
+        while end > block.range.location, [10, 13].contains(source.character(at: end - 1)) { end -= 1 }
+        return NSRange(location: block.range.location, length: end - block.range.location)
+    }
+
+    func attachmentID(in selection: NSRange) -> UUID? {
+        guard !showsMarkdown, selection.length > 0, let block = document.block(at: selection.location),
+              case .attachment(let attachment) = block.kind,
+              attachmentSelection(for: attachment.id) == selection else { return nil }
+        return attachment.id
+    }
+
 
     func attachmentDisplay(for id: UUID) -> AttachmentDisplay? {
         attachmentProvider?(id)
     }
 
-    /// An attachment line keeps its Markdown but reserves room for the picture or chip, which the layout fragment
-    /// draws (see `AttachmentFragment`). The height depends only on the attachment, never on the caret, so moving
-    /// through the line shifts nothing. The Markdown itself shows only while the caret is on the line.
-    private func styleAttachment(_ paragraph: NSMutableAttributedString, line: AttachmentLine, isActive: Bool) {
-        let full = NSRange(location: 0, length: paragraph.length)
-        let display = attachmentProvider?(line.id)
-
-        var height = AttachmentFragment.chipHeight
-        if line.isImage, let display, display.isImage, display.pixelSize.height > 0 {
-            // Pixels are shown at half size, which is how a Retina screen shows them, up to a maximum height.
-            height = min(Self.maxImageHeight, max(AttachmentFragment.chipHeight, display.pixelSize.height / 2))
-        } else if line.isImage {
-            height = 120
-        }
-
-        let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = height + 8
-        style.maximumLineHeight = height + 8
-        style.paragraphSpacing = 4
-        style.paragraphSpacingBefore = 4
-        // One line only, so a long link never makes the line taller.
-        style.lineBreakMode = .byClipping
-        paragraph.addAttribute(.paragraphStyle, value: style, range: full)
-        paragraph.addAttribute(Self.attachmentKey, value: line.id.uuidString, range: full)
-        paragraph.addAttribute(Self.attachmentHeightKey, value: Double(height), range: full)
-
-        if isActive {
-            paragraph.addAttributes([.foregroundColor: EditorTheme.dimColor, .backgroundColor: EditorTheme.codeBackground], range: full)
-        } else {
-            paragraph.addAttribute(.foregroundColor, value: EditorColor.clear, range: full)
-        }
-    }
-
     /// The attachment whose picture or chip is under `point` (text container coordinates).
     func attachmentID(at point: CGPoint) -> UUID? {
+        guard !showsMarkdown else { return nil }
         guard let layoutManager,
               let fragment = layoutManager.textLayoutFragment(for: point),
               let paragraph = fragment.textElement as? NSTextParagraph,
@@ -621,6 +902,46 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return UUID(uuidString: value)
     }
 
+    /// The address of the link under `point` (text container coordinates), unless the caret is on that line: then a
+    /// tap places the caret, so the link can be edited.
+    func linkURL(at point: CGPoint) -> URL? {
+        guard !showsMarkdown else { return nil }
+        guard let layoutManager, let contentStorage, let storage = contentStorage.textStorage,
+              let fragment = layoutManager.textLayoutFragment(for: point),
+              let paragraph = fragment.textElement as? NSTextParagraph,
+              let start = fragment.textElement?.elementRange?.location
+        else { return nil }
+
+        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: start)
+        let lineEnd = offset + paragraph.attributedString.length
+        if isLineActive(NSRange(location: offset, length: lineEnd - offset), in: storage) { return nil }
+
+        let local = CGPoint(x: point.x - fragment.layoutFragmentFrame.minX, y: point.y - fragment.layoutFragmentFrame.minY)
+        for line in fragment.textLineFragments where line.typographicBounds.contains(local) {
+            let inLine = CGPoint(x: local.x - line.typographicBounds.minX, y: local.y - line.typographicBounds.minY)
+            let index = line.characterIndex(for: inLine)
+            guard index >= 0, index < paragraph.attributedString.length,
+                  let value = paragraph.attributedString.attribute(Self.linkURLKey, at: index, effectiveRange: nil) as? String,
+                  let url = URL(string: value), url.scheme != nil
+            else { continue }
+            return url
+        }
+        return nil
+    }
+
+    // MARK: Width
+
+    private var lastContainerWidth: CGFloat = 0
+
+    /// Table fonts depend on the width of the text, so a rotation or a resized window styles the lines again.
+    func containerWidthMayHaveChanged() {
+        guard let width = layoutManager?.textContainer?.size.width, abs(width - lastContainerWidth) > 0.5 else { return }
+        let isFirst = lastContainerWidth == 0
+        lastContainerWidth = width
+        guard !isFirst else { return }
+        Task { @MainActor [weak self] in self?.reload() }
+    }
+
     /// Draws the lines again, for when pictures arrive by sync or an attachment is added.
     func refreshAttachments() {
         reload()
@@ -628,39 +949,10 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
 
     // MARK: Checklists
 
-    private func styleChecklist(_ paragraph: NSMutableAttributedString, match: NSTextCheckingResult, isActive: Bool) {
-        let source = paragraph.string as NSString
-        let full = NSRange(location: 0, length: paragraph.length)
-        let markRange = match.range(at: 2)
-        let state = source.substring(with: match.range(at: 3))
-        let isChecked = state == "x" || state == "X"
-
-        if isActive {
-            paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: markRange)
-            return
-        }
-
-        // Keep the mark's room but shrink and hide it, then draw a box there (see `ChecklistFragment`).
-        let base = (paragraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont) ?? EditorTheme.proseFont
-        let small = EditorFont.systemFont(ofSize: base.pointSize * 0.7)
-        paragraph.addAttributes([.font: small, .foregroundColor: EditorColor.clear], range: markRange)
-
-        let hiddenWidth = NSAttributedString(string: source.substring(with: markRange), attributes: [.font: small]).size().width
-        let indentWidth = NSAttributedString(string: source.substring(with: match.range(at: 1)), attributes: [.font: base]).size().width
-        paragraph.addAttribute(Self.checklistKey, value: isChecked ? 2 : 1, range: full)
-        paragraph.addAttribute(Self.checklistWidthKey, value: Double(hiddenWidth), range: full)
-        paragraph.addAttribute(Self.checklistIndentKey, value: Double(indentWidth), range: full)
-
-        if isChecked {
-            let content = NSRange(location: NSMaxRange(markRange), length: max(0, full.length - NSMaxRange(markRange)))
-            paragraph.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: content)
-            paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: content)
-        }
-    }
-
     /// Finds the checklist line whose box is under `point` (text container coordinates).
     /// Returns a location inside that line, or nil if the point is not on a checkbox.
     func checklistLine(at point: CGPoint) -> Int? {
+        guard !showsMarkdown else { return nil }
         guard let layoutManager, let contentStorage,
               let fragment = layoutManager.textLayoutFragment(for: point),
               let paragraph = fragment.textElement as? NSTextParagraph,
@@ -680,60 +972,6 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return contentStorage.offset(from: contentStorage.documentRange.location, to: start)
     }
 
-    // MARK: Inline styles
-
-    /// Styles bold, italic, strikethrough, code, and links, and hides their marks unless the line is being edited.
-    /// - Returns: whether anything was styled.
-    private func styleInline(_ paragraph: NSMutableAttributedString, hideMarkers: Bool) -> Bool {
-        let spans = InlineScanner.spans(in: paragraph.string)
-        for span in spans {
-            let base = (paragraph.attribute(.font, at: span.content.location, effectiveRange: nil) as? EditorFont) ?? EditorTheme.proseFont
-            switch span.kind {
-            case .bold:
-                paragraph.addAttribute(.font, value: EditorTheme.traited(base, bold: true), range: span.content)
-            case .italic:
-                paragraph.addAttribute(.font, value: EditorTheme.traited(base, italic: true), range: span.content)
-            case .strikethrough:
-                paragraph.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: span.content)
-            case .code:
-                paragraph.addAttributes([
-                    .font: EditorTheme.inlineCodeFont(matching: base),
-                    .backgroundColor: EditorTheme.codeBackground,
-                ], range: span.content)
-            case .link:
-                paragraph.addAttributes([
-                    .foregroundColor: EditorTheme.linkColor,
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
-                ], range: span.content)
-            }
-            for marker in span.markers {
-                if hideMarkers {
-                    collapse(paragraph, range: marker)
-                } else {
-                    paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: marker)
-                }
-            }
-        }
-        return !spans.isEmpty
-    }
-
-    /// Hides text by making it transparent and nearly zero-sized. The character count is unchanged, so
-    /// selection, copy, and undo still operate on the real Markdown.
-    private func collapse(_ text: NSMutableAttributedString, range: NSRange) {
-        // A near-zero font size leaves no visible gap where the marks were.
-        text.addAttribute(.font, value: EditorFont.systemFont(ofSize: 0.01), range: range)
-        text.addAttribute(.foregroundColor, value: EditorColor.clear, range: range)
-        if range.length == text.length {
-            // A whole hidden line must not take vertical space either.
-            let style = NSMutableParagraphStyle()
-            style.minimumLineHeight = 0.01
-            style.maximumLineHeight = 0.01
-            style.paragraphSpacing = 0
-            style.paragraphSpacingBefore = 0
-            text.addAttribute(.paragraphStyle, value: style, range: range)
-        }
-    }
-
     // MARK: NSTextLayoutManagerDelegate
 
     func textLayoutManager(
@@ -747,10 +985,8 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
                 fragment.controller = self
                 return fragment
             }
-            if paragraph.attributedString.attribute(Self.tableKey, at: 0, effectiveRange: nil) != nil {
-                let fragment = TableFragment(textElement: textElement, range: textElement.elementRange)
-                fragment.controller = self
-                return fragment
+            if paragraph.attributedString.attribute(Self.decorationKey, at: 0, effectiveRange: nil) != nil {
+                return DecorationFragment(textElement: textElement, range: textElement.elementRange)
             }
             if paragraph.attributedString.attribute(Self.attachmentKey, at: 0, effectiveRange: nil) != nil {
                 let fragment = AttachmentFragment(textElement: textElement, range: textElement.elementRange)
@@ -762,5 +998,39 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
             }
         }
         return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
+    }
+}
+
+// MARK: - Element services
+
+extension LivePreviewController: ElementServices {
+    var textContainerWidth: CGFloat { layoutManager?.textContainer?.size.width ?? 0 }
+    var linePadding: CGFloat { layoutManager?.textContainer?.lineFragmentPadding ?? 5 }
+
+    func syntaxTokens(for block: CodeBlock) -> [SyntaxToken] {
+        guard let storage = contentStorage?.textStorage else { return [] }
+        return syntaxTokens(for: block, in: storage)
+    }
+
+    func isActive(_ block: CodeBlock) -> Bool {
+        guard let storage = contentStorage?.textStorage else { return false }
+        return isActive(block, selection: selection, in: storage)
+    }
+
+    func tableModel(for block: MarkdownDocument.Block) -> MarkdownTable? {
+        guard let storage = contentStorage?.textStorage,
+              let index = tables.firstIndex(where: { $0.range == block.range }) else { return nil }
+        return tableModel(at: index, in: storage)
+    }
+
+    func tableLayout(forRowAt range: NSRange) -> (run: NSRange, scale: CGFloat) {
+        guard let storage = contentStorage?.textStorage else { return (range, 1) }
+        let layout: TableLayout = tableLayout(forRowAt: range, in: storage)
+        return (layout.run, layout.scale)
+    }
+
+    func nextLineIsTableSeparator(after range: NSRange) -> Bool {
+        guard let storage = contentStorage?.textStorage else { return false }
+        return nextLineIsTableSeparator(after: range, in: storage)
     }
 }

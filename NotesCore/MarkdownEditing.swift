@@ -13,6 +13,12 @@ public struct TextEdit: Equatable, Sendable {
         self.replacement = replacement
         self.selection = selection
     }
+
+    /// Validate an edit against a snapshot before handing it to the native text input system.
+    /// The inverse restores both the replaced text and the original selection.
+    public func transaction(in text: String, selectionBefore: NSRange) -> TextEditTransaction? {
+        TextEditTransaction(edit: self, text: text, selectionBefore: selectionBefore)
+    }
 }
 
 /// The formatting actions offered by the keyboard bar and keyboard shortcuts.
@@ -52,6 +58,24 @@ public enum MarkdownEditing {
     /// With no selection it inserts a pair and puts the caret between them.
     private static func wrap(_ marker: String, in source: NSString, selection: NSRange) -> TextEdit {
         let markerLength = (marker as NSString).length
+        let relevant: (InlineSpan.Kind) -> Bool = { kind in
+            switch marker {
+            case "**": kind == .bold || kind == .boldItalic
+            case "_": kind == .italic || kind == .boldItalic
+            case "~~": kind == .strikethrough
+            case "`": kind == .code
+            default: false
+            }
+        }
+        if let span = InlineScanner.spans(in: source as String)
+            .filter({ relevant($0.kind) && selection.location >= $0.content.location && NSMaxRange(selection) <= NSMaxRange($0.content) })
+            .min(by: { $0.range.length < $1.range.length }) {
+            let remaining = span.kind == .boldItalic ? (marker == "**" ? "*" : "**") : ""
+            let content = source.substring(with: span.content)
+            return TextEdit(range: span.range, replacement: remaining + content + remaining,
+                            selection: NSRange(location: span.range.location + remaining.utf16.count + selection.location - span.content.location,
+                                               length: selection.length))
+        }
 
         let hasMarkerBefore = selection.location >= markerLength
             && source.substring(with: NSRange(location: selection.location - markerLength, length: markerLength)) == marker
@@ -66,6 +90,19 @@ public enum MarkdownEditing {
             )
         }
 
+        if marker == "`", selection.length > 0 {
+            let content = source.substring(with: selection)
+            var longest = 0, run = 0
+            for character in content {
+                run = character == "`" ? run + 1 : 0
+                longest = max(longest, run)
+            }
+            let fence = String(repeating: "`", count: longest + 1)
+            let padding = content.hasPrefix("`") || content.hasSuffix("`") ? " " : ""
+            return TextEdit(range: selection, replacement: fence + padding + content + padding + fence,
+                            selection: NSRange(location: selection.location + fence.utf16.count + padding.utf16.count,
+                                               length: selection.length))
+        }
         if selection.length == 0 {
             return TextEdit(
                 range: selection,
@@ -237,6 +274,13 @@ public enum MarkdownEditing {
         return trimmed.allSatisfy { "|:- ".contains($0) }
     }
 
+    /// Where the pipes that divide a table row into cells are (UTF-16). A pipe after a backslash is part of a cell.
+    public static func tablePipeOffsets(in line: NSString) -> [Int] {
+        (0..<line.length).filter { index in
+            line.character(at: index) == 124 && (index == 0 || line.character(at: index - 1) != 92)
+        }
+    }
+
     private static func cells(of line: String) -> [String] {
         var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("|") { trimmed.removeFirst() }
@@ -244,7 +288,8 @@ public enum MarkdownEditing {
         return trimmed.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
-    /// A three-column table with a header and two empty rows, already lined up, with "Column 1" selected.
+    /// A three-column table with a header and two empty rows, already lined up. The table always ends with a line break,
+    /// so there is a line below it for the caret: the table is shown as a grid, and the caret cannot rest inside it.
     private static func table(in source: NSString, selection: NSRange) -> TextEdit {
         let header = ["Column 1", "Column 2", "Column 3"]
         let width = 8
@@ -257,21 +302,21 @@ public enum MarkdownEditing {
         let line = source.lineRange(for: NSRange(location: min(selection.location, source.length), length: 0))
         let content = source.substring(with: line)
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // A blank line becomes the table, keeping its own newline.
-            let hadNewline = content.hasSuffix("\n")
+            // A blank line becomes the table, and the caret goes to the line after it.
+            let replacement = rows + "\n"
             return TextEdit(
                 range: line,
-                replacement: rows + (hadNewline ? "\n" : ""),
-                selection: NSRange(location: line.location + 2, length: width)
+                replacement: replacement,
+                selection: NSRange(location: line.location + (replacement as NSString).length, length: 0)
             )
         }
         // A line with text: put the table on the lines after it.
-        let lineEnd = NSMaxRange(line) - (content.hasSuffix("\n") ? 1 : 0)
-        return TextEdit(
-            range: NSRange(location: lineEnd, length: 0),
-            replacement: "\n" + rows,
-            selection: NSRange(location: lineEnd + 1 + 2, length: width)
-        )
+        let hasLineBreak = content.hasSuffix("\n")
+        let lineEnd = NSMaxRange(line) - (hasLineBreak ? 1 : 0)
+        let replacement = "\n" + rows + (hasLineBreak ? "" : "\n")
+        // With a line break already after the line, it becomes the table's own, and the caret goes past it.
+        let caret = lineEnd + (replacement as NSString).length + (hasLineBreak ? 1 : 0)
+        return TextEdit(range: NSRange(location: lineEnd, length: 0), replacement: replacement, selection: NSRange(location: caret, length: 0))
     }
 
     /// Lines up the columns of the table the caret is in, by padding every cell to the widest one in its column.
@@ -347,5 +392,37 @@ public enum MarkdownEditing {
     private static func clamped(_ range: NSRange, length: Int) -> NSRange {
         let location = min(max(range.location, 0), length)
         return NSRange(location: location, length: min(max(range.length, 0), length - location))
+    }
+}
+
+public struct TextEditTransaction: Equatable, Sendable {
+    public let edit: TextEdit
+    public let inverse: TextEdit
+    public let result: String
+    public let changesText: Bool
+
+    fileprivate init?(edit: TextEdit, text: String, selectionBefore: NSRange) {
+        func valid(_ range: NSRange, in text: String) -> Bool {
+            let length = text.utf16.count
+            guard range.location >= 0, range.location <= length, range.length >= 0,
+                  range.length <= length - range.location else { return false }
+            let source = text as NSString
+            func scalarBoundary(_ offset: Int) -> Bool {
+                offset == 0 || offset == length || !(0xDC00...0xDFFF).contains(source.character(at: offset))
+            }
+            return scalarBoundary(range.location) && scalarBoundary(NSMaxRange(range))
+        }
+        guard valid(edit.range, in: text), valid(selectionBefore, in: text) else { return nil }
+        let source = text as NSString
+        let replaced = source.substring(with: edit.range)
+        let result = source.replacingCharacters(in: edit.range, with: edit.replacement)
+        guard valid(edit.selection, in: result) else { return nil }
+        self.edit = edit
+        self.result = result
+        self.changesText = replaced != edit.replacement
+        self.inverse = TextEdit(
+            range: NSRange(location: edit.range.location, length: edit.replacement.utf16.count),
+            replacement: replaced, selection: selectionBefore
+        )
     }
 }

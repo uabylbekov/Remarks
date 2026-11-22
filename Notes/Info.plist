@@ -6,5 +6,28 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>io.github.uabylbekov.notes.note-reference</string>
+			<key>UTTypeDescription</key>
+			<string>Note reference</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.uabylbekov.notes.folder-reference</string>
+            <key>UTTypeDescription</key>
+            <string>Folder reference</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+	</array>
 </dict>
 </plist>
