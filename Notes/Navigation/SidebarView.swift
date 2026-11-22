@@ -15,6 +15,7 @@ struct SidebarView: View {
     /// Set to true to ask for a new top-level folder. The window shows the question, so the File menu and this
     /// button share it.
     @Binding var asksNewFolder: Bool
+    let showsNewFolderButton: Bool
     /// Shows a note that was just created here. The window owns the selection.
     var openNote: (UUID) -> Void = { _ in }
 
@@ -28,7 +29,7 @@ struct SidebarView: View {
     @State private var expandedFolders: [UUID: Bool] = [:]
     @State private var errorMessage: String?
     #if os(iOS)
-    @State private var showsAppearance = false
+    @State private var showsSettings = false
     #endif
 
     private var library: Library { Library(context: context) }
@@ -43,9 +44,9 @@ struct SidebarView: View {
                 NavigationLink(value: NoteScope.unfiled) {
                     Label("Unfiled", systemImage: "tray")
                 }
-                    .dropDestination(for: NoteReference.self) { references, _ in
-                        _ = moveNotes(references, to: nil)
-                    }
+                .dropDestination(for: NoteReference.self) { references, _ in
+                    moveNotes(references, to: nil)
+                }
             }
 
             Section("Folders") {
@@ -90,12 +91,12 @@ struct SidebarView: View {
         }
         .navigationTitle("Notes")
         #if os(iOS)
-        .sheet(isPresented: $showsAppearance) {
+        .sheet(isPresented: $showsSettings) {
             NavigationStack {
-                AppearanceSettingsView()
+                SettingsView()
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showsAppearance = false }
+                            Button("Done") { showsSettings = false }
                         }
                     }
             }
@@ -103,15 +104,15 @@ struct SidebarView: View {
         #endif
         .toolbar {
             #if os(macOS)
-            // As in Apple Notes: a button at the top of the sidebar. The default placement keeps it in the sidebar's own
-            // toolbar section, so it goes away when the sidebar is hidden. `.primaryAction` would put it at the window's
-            // trailing edge, which belongs to the editor.
-            ToolbarItem {
-                Button("New Folder", systemImage: "folder.badge.plus") { asksNewFolder = true }
+            // Folder management follows the sidebar's column visibility.
+            if showsNewFolderButton {
+                ToolbarItem {
+                    Button("New Folder", systemImage: "folder.badge.plus") { asksNewFolder = true }
+                }
             }
             #else
             ToolbarItem(placement: .topBarLeading) {
-                Button("Appearance", systemImage: "textformat") { showsAppearance = true }
+                Button("Settings", systemImage: "gearshape") { showsSettings = true }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 EditButton()
@@ -170,13 +171,11 @@ struct SidebarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .tag(scope)
         .badge(count)
         .contextMenu { folderMenu(folder) }
         .dropDestination(for: NoteReference.self) { references, _ in
-            _ = moveNotes(references, to: folder)
+            moveNotes(references, to: folder)
         }
-
     }
 
     private func tagRow(_ tag: Tag) -> some View {
@@ -187,9 +186,8 @@ struct SidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
-            .tag(scope)
-            .badge(count)
-            .contextMenu { tagMenu(tag) }
+        .badge(count)
+        .contextMenu { tagMenu(tag) }
     }
 
     // MARK: Menus
@@ -248,8 +246,7 @@ struct SidebarView: View {
 
     private func deleteTag(_ tag: Tag) {
         let id = tag.id
-        _ = perform { library.delete(tag) }
-        if selection == .tag(id) { selection = .all }
+        if perform({ library.delete(tag) }), selection == .tag(id) { selection = .all }
     }
 
     /// Deleted notes stay in Recently Deleted; moving is only for active notes.
@@ -327,6 +324,7 @@ struct SidebarView: View {
             try context.save()
             return true
         } catch {
+            context.rollback()
             errorMessage = error.localizedDescription
             return false
         }
@@ -388,7 +386,7 @@ private struct FolderTree<Row: View>: View {
     let library = Library(context: container.mainContext)
     _ = try? library.createFolder(named: "Work")
     return NavigationStack {
-        SidebarView(selection: .constant(.all), asksNewFolder: .constant(false))
+        SidebarView(selection: .constant(.all), asksNewFolder: .constant(false), showsNewFolderButton: true)
     }
     .modelContainer(container)
 }

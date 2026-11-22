@@ -22,12 +22,22 @@ struct AttachmentPickers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { commands.requestAttachment = request }
+            .onChange(of: commands.attachmentRequest) { _, source in
+                guard let source else { return }
+                commands.attachmentRequest = nil
+                request(source)
+            }
+            .onChange(of: commands.pastedFiles.count) {
+                let files = commands.pastedFiles
+                commands.pastedFiles = []
+                files.forEach { add(data: $0.data, fileName: $0.fileName, type: $0.type) }
+            }
             .photosPicker(isPresented: $showsPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
-            .onChange(of: photoItems) { _, items in
+            .task(id: photoItems) {
+                let items = photoItems
                 guard !items.isEmpty else { return }
-                photoItems = []
-                Task { await addPhotos(items) }
+                await addPhotos(items)
+                if !Task.isCancelled { photoItems = [] }
             }
             .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                 switch result {
@@ -47,13 +57,10 @@ struct AttachmentPickers: ViewModifier {
                     .ignoresSafeArea()
             }
             #endif
-            .alert(
-                "Couldn’t Add Attachment",
-                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-            ) {
+            .alert("Couldn’t Add Attachment", item: $errorMessage) { _ in
                 Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
+            } message: { message in
+                Text(message)
             }
     }
 
@@ -88,13 +95,21 @@ struct AttachmentPickers: ViewModifier {
 
     private func addPhotos(_ items: [PhotosPickerItem]) async {
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else {
-                errorMessage = AttachmentError.unreadable.localizedDescription
-                continue
+            do {
+                try Task.checkCancellation()
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    if !Task.isCancelled { errorMessage = AttachmentError.unreadable.localizedDescription }
+                    continue
+                }
+                // A transfer may finish after cancellation; never insert into a different editor.
+                try Task.checkCancellation()
+                let type = item.supportedContentTypes.first(where: { $0.conforms(to: .image) })
+                let fileExtension = type?.preferredFilenameExtension ?? "jpg"
+                add(data: data, fileName: "Photo.\(fileExtension)", type: type ?? .jpeg)
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
             }
-            let type = item.supportedContentTypes.first(where: { $0.conforms(to: .image) })
-            let fileExtension = type?.preferredFilenameExtension ?? "jpg"
-            add(data: data, fileName: "Photo.\(fileExtension)", type: type ?? .jpeg)
         }
     }
 

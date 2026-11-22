@@ -276,16 +276,18 @@ public enum MarkdownEditing {
 
     /// Where the pipes that divide a table row into cells are (UTF-16). A pipe after a backslash is part of a cell.
     public static func tablePipeOffsets(in line: NSString) -> [Int] {
-        (0..<line.length).filter { index in
-            line.character(at: index) == 124 && (index == 0 || line.character(at: index - 1) != 92)
+        var offsets: [Int] = []
+        var escaped = false
+        for index in 0..<line.length {
+            let character = line.character(at: index)
+            if character == 124, !escaped { offsets.append(index) }
+            escaped = character == 92 && !escaped
         }
+        return offsets
     }
 
     private static func cells(of line: String) -> [String] {
-        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
-        if trimmed.hasSuffix("|") { trimmed.removeLast() }
-        return trimmed.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+        MarkdownTable.cells(of: line)
     }
 
     /// A three-column table with a header and two empty rows, already lined up. The table always ends with a line break,
@@ -311,11 +313,12 @@ public enum MarkdownEditing {
             )
         }
         // A line with text: put the table on the lines after it.
-        let hasLineBreak = content.hasSuffix("\n")
-        let lineEnd = NSMaxRange(line) - (hasLineBreak ? 1 : 0)
-        let replacement = "\n" + rows + (hasLineBreak ? "" : "\n")
+        var lineEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &lineEnd, for: line)
+        let terminatorLength = NSMaxRange(line) - lineEnd
+        let replacement = "\n" + rows + (terminatorLength > 0 ? "" : "\n")
         // With a line break already after the line, it becomes the table's own, and the caret goes past it.
-        let caret = lineEnd + (replacement as NSString).length + (hasLineBreak ? 1 : 0)
+        let caret = lineEnd + (replacement as NSString).length + terminatorLength
         return TextEdit(range: NSRange(location: lineEnd, length: 0), replacement: replacement, selection: NSRange(location: caret, length: 0))
     }
 
@@ -341,8 +344,8 @@ public enum MarkdownEditing {
         }
 
         let block = source.substring(with: end)
-        let hadTrailingNewline = block.hasSuffix("\n")
-        let lines = block.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let hadTrailingNewline = block.last?.isNewline == true
+        let lines = block.split(whereSeparator: \.isNewline).map(String.init)
         let table = lines.map { cells(of: $0) }
         let columns = table.map(\.count).max() ?? 0
         guard columns > 0 else { return unchanged }

@@ -52,20 +52,15 @@ struct NoteEditor: View {
     var commands: EditorCommands?
     /// Called when an attachment is tapped or clicked. The screen around the editor shows it.
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
-    @Environment(\.history) private var history
 
     var onSaveError: ((String) -> Void)?
     @State private var saveError: String?
-    @State private var notice: String?
-    @State private var noticeID: UUID?
 
     var body: some View {
         // Reading the revision here makes SwiftUI update the text view whenever an appearance setting changes.
         NoteTextView(
             note: note,
-            history: history,
             appearanceRevision: AppearanceModel.shared.revision,
-            onKeptEdits: { showNotice() },
             onSaveError: { message in
                 // Dismantling an editor can flush a save while SwiftUI is updating views.
                 Task { @MainActor in
@@ -76,39 +71,14 @@ struct NoteEditor: View {
             commands: commands,
             onOpenAttachment: onOpenAttachment
         )
-        .overlay(alignment: .top) {
-            if let notice {
-                Label(notice, systemImage: "clock.arrow.circlepath")
-                    .font(.footnote)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial, in: .capsule)
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.default, value: notice)
-        .task(id: noticeID) {
-            guard noticeID != nil else { return }
-            do {
-                try await Task.sleep(for: .seconds(4))
-                notice = nil
-            } catch {
-                // A newer notice or disappearance cancels this dismissal.
-            }
-        }
+        #if os(iOS)
+        // Let the text view run under the bars; UITextView insets its own content by the safe area, so text scrolls
+        // beneath them instead of being clipped at their edges.
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        #endif
         .alert("Unable to Save Note", item: $saveError) { _ in
             Button("OK", role: .cancel) {}
         } message: { Text(verbatim: $0) }
-    }
-
-    /// The note was changed from outside while you were typing. Your text stays, and the other version
-    /// is in Version History.
-    private func showNotice() {
-        let message = String(localized: "Another change was saved to Version History")
-        notice = message
-        AccessibilityNotification.Announcement(message).post()
-        noticeID = UUID()
     }
 }
 
@@ -125,10 +95,32 @@ private final class MarkdownUITextView: UITextView {
     var onLayout: (() -> Void)?
     /// Called when the text view gains or loses the keyboard.
     var onFocusChange: (() -> Void)?
+    /// UIKit sends nothing to the delegate for Backspace at the very start of the text, so the editor gets it here.
+    /// Returns true when it handled the key.
+    var onBackspaceAtStart: (() -> Bool)?
+
+    private var previousViewportSize: CGSize = .zero
 
     override func layoutSubviews() {
         super.layoutSubviews()
         onLayout?()
+        if bounds.size != previousViewportSize {
+            previousViewportSize = bounds.size
+            revealCaret()
+        }
+    }
+
+    /// Keep the caret clear of both viewport edges after keyboard, rotation, or preview-layout changes.
+    func revealCaret() {
+        guard isFirstResponder, selectedRange.length == 0, let selection = selectedTextRange else { return }
+        let caret = caretRect(for: selection.end)
+        guard !caret.isNull, !caret.isInfinite else { return }
+        scrollRectToVisible(caret.insetBy(dx: 0, dy: -max(textContainerInset.top, textContainerInset.bottom)), animated: false)
+    }
+
+    override func deleteBackward() {
+        if selectedRange == NSRange(location: 0, length: 0), markedTextRange == nil, onBackspaceAtStart?() == true { return }
+        super.deleteBackward()
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -202,21 +194,20 @@ private final class MarkdownUITextView: UITextView {
 
 private struct NoteTextView: UIViewRepresentable {
     let note: Note
-    let history: HistoryRecorder?
     let appearanceRevision: Int
     @Environment(\.openURL) private var openURL
-    let onKeptEdits: () -> Void
     let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history, commands: commands) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands) }
 
     func makeUIView(context: Context) -> UITextView {
         // `usingTextLayoutManager: true` selects TextKit 2.
         let textView = MarkdownUITextView(usingTextLayoutManager: true)
         textView.font = EditorTheme.proseFont
+        textView.backgroundColor = EditorTheme.editorBackground
         textView.adjustsFontForContentSizeCategory = true
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
         textView.keyboardDismissMode = .interactive
@@ -238,11 +229,13 @@ private struct NoteTextView: UIViewRepresentable {
         let session = context.coordinator.session
         session.onSaveError = onSaveError
         session.update(note: note)
-        session.onKeptEdits = onKeptEdits
         session.onOpenAttachment = onOpenAttachment
         session.applyAppearance(revision: appearanceRevision)
         session.refreshAttachmentsIfChanged()
-        session.setShowsMarkdown(commands?.showsMarkdown ?? false)
+        if session.setShowsMarkdown(commands?.showsMarkdown ?? false) {
+            textView.layoutIfNeeded()
+            (textView as? MarkdownUITextView)?.revealCaret()
+        }
         commands?.handler = { [weak coordinator = context.coordinator] in coordinator?.perform($0) }
         commands?.insert = { [weak coordinator = context.coordinator] in coordinator?.insertBlock($0) }
     }
@@ -259,8 +252,8 @@ private struct NoteTextView: UIViewRepresentable {
         private weak var textView: MarkdownUITextView?
         private var tableOverlay: TableOverlay?
 
-        init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
-            session = EditorSession(note: note, history: history, commands: commands)
+        init(note: Note, commands: EditorCommands?) {
+            session = EditorSession(note: note, commands: commands)
         }
 
         func attach(to textView: MarkdownUITextView) {
@@ -271,10 +264,17 @@ private struct NoteTextView: UIViewRepresentable {
                 origin: { [weak textView] in
                     let inset = textView?.textContainerInset ?? .zero
                     return CGPoint(x: inset.left, y: inset.top)
-                },
-                isFocused: { [weak textView] in textView?.isFirstResponder ?? false }
+                }
             )
             textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
+            textView.onBackspaceAtStart = { [weak self] in
+                guard let self, let action = self.session.preview?.backspace(at: 0) else { return false }
+                switch action {
+                case .normal: return false
+                case .ignore: return true
+                case .edit(let edit): self.apply(edit); return true
+                }
+            }
             textView.onLayout = { [weak self] in
                 self?.session.preview?.containerWidthMayHaveChanged()
                 self?.tableOverlay?.layoutDidChange()
@@ -303,7 +303,10 @@ private struct NoteTextView: UIViewRepresentable {
                     isComposing: { [weak textView] in textView?.markedTextRange != nil },
                     applyEdit: { [weak self] in self?.replaceText($0) ?? false },
                     undoManager: { [weak textView] in textView?.undoManager },
-                    applyFont: { [weak textView] in textView?.font = EditorTheme.proseFont },
+                    applyFont: { [weak textView] in
+                        textView?.font = EditorTheme.proseFont
+                        textView?.backgroundColor = EditorTheme.editorBackground
+                    },
                     applyBodyStyle: { [weak self] in self?.applyBodyStyle() },
                     focus: { [weak textView] in Task { @MainActor in textView?.becomeFirstResponder() } }
                 ),
@@ -345,16 +348,23 @@ private struct NoteTextView: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             checklistLine(for: gestureRecognizer) != nil || attachmentID(for: gestureRecognizer) != nil
                 || linkURL(for: gestureRecognizer) != nil
+                || containerPoint(for: gestureRecognizer).flatMap { session.preview?.elementBoundary(at: $0) } != nil
         }
 
         @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
             guard let textView else { return }
+            if let point = containerPoint(for: gesture), let range = session.preview?.elementBoundary(at: point) {
+                textView.selectedRange = range
+                session.preview?.selectionChanged(to: range)
+                textView.becomeFirstResponder()
+                return
+            }
             if let url = linkURL(for: gesture) {
                 openURL?(url)
                 return
             }
             if let id = attachmentID(for: gesture), let attachment = session.catalog.attachment(with: id) {
-                if let range = session.preview?.attachmentSelection(for: id), textView.selectedRange != range {
+                if let point = containerPoint(for: gesture), let range = session.preview?.attachmentSelection(at: point), textView.selectedRange != range {
                     textView.selectedRange = range
                     textView.becomeFirstResponder()
                 } else {
@@ -385,7 +395,8 @@ private struct NoteTextView: UIViewRepresentable {
 
         func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
-            apply(MarkdownEditing.edit(command, in: textView.text, selection: textView.selectedRange))
+            guard session.apply(MarkdownEditing.edit(command, in: textView.text, selection: textView.selectedRange)) else { return }
+            textView.becomeFirstResponder()
         }
 
         private func apply(_ edit: TextEdit) { session.apply(edit) }
@@ -457,6 +468,7 @@ private struct NoteTextView: UIViewRepresentable {
             // The caret never rests inside Markdown that is drawn as a checkbox or a table.
             if let adjusted = session.preview?.adjustedSelection(to: textView.selectedRange) {
                 textView.selectedRange = adjusted
+                session.preview?.selectionChanged(to: textView.selectedRange)
                 return
             }
             session.preview?.selectionChanged(to: textView.selectedRange)
@@ -541,16 +553,14 @@ final class MarkdownNSTextView: NSTextView {
 
 private struct NoteTextView: NSViewRepresentable {
     let note: Note
-    let history: HistoryRecorder?
     let appearanceRevision: Int
     @Environment(\.openURL) private var openURL
-    let onKeptEdits: () -> Void
     let onSaveError: (String) -> Void
     var initialSelection: Int?
     var commands: EditorCommands?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(note: note, history: history, commands: commands) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, commands: commands) }
 
     func makeNSView(context: Context) -> NSScrollView {
         // The same setup `NSTextView.scrollableTextView()` does, but with our own subclass.
@@ -566,6 +576,7 @@ private struct NoteTextView: NSViewRepresentable {
         scrollView.drawsBackground = false
         scrollView.documentView = textView
         textView.font = EditorTheme.proseFont
+        textView.backgroundColor = EditorTheme.editorBackground
         textView.isRichText = false
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 12, height: 12)
@@ -587,7 +598,6 @@ private struct NoteTextView: NSViewRepresentable {
         let session = context.coordinator.session
         session.onSaveError = onSaveError
         session.update(note: note)
-        session.onKeptEdits = onKeptEdits
         session.onOpenAttachment = onOpenAttachment
         session.applyAppearance(revision: appearanceRevision)
         session.refreshAttachmentsIfChanged()
@@ -608,16 +618,15 @@ private struct NoteTextView: NSViewRepresentable {
         private weak var textView: MarkdownNSTextView?
         private var tableOverlay: TableOverlay?
 
-        init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
-            session = EditorSession(note: note, history: history, commands: commands)
+        init(note: Note, commands: EditorCommands?) {
+            session = EditorSession(note: note, commands: commands)
         }
 
         func attach(to textView: MarkdownNSTextView) {
             self.textView = textView
             tableOverlay = TableOverlay(
                 container: textView,
-                origin: { [weak textView] in textView?.textContainerOrigin ?? .zero },
-                isFocused: { [weak textView] in textView?.window?.firstResponder === textView }
+                origin: { [weak textView] in textView?.textContainerOrigin ?? .zero }
             )
             textView.onFocusChange = { [weak self] in self?.tableOverlay?.scheduleUpdate() }
             textView.onLayout = { [weak self] in
@@ -635,7 +644,10 @@ private struct NoteTextView: NSViewRepresentable {
                     isComposing: { [weak textView] in textView?.hasMarkedText() ?? false },
                     applyEdit: { [weak self] in self?.replaceText($0) ?? false },
                     undoManager: { [weak textView] in textView?.undoManager },
-                    applyFont: { [weak textView] in textView?.font = EditorTheme.proseFont },
+                    applyFont: { [weak textView] in
+                        textView?.font = EditorTheme.proseFont
+                        textView?.backgroundColor = EditorTheme.editorBackground
+                    },
                     applyBodyStyle: { [weak self] in self?.applyBodyStyle() },
                     focus: { [weak textView] in Task { @MainActor in textView?.window?.makeFirstResponder(textView) } }
                 ),
@@ -668,12 +680,18 @@ private struct NoteTextView: NSViewRepresentable {
             guard let textView else { return false }
             let origin = textView.textContainerOrigin
             let point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+            if let range = session.preview?.elementBoundary(at: point) {
+                textView.setSelectedRange(range)
+                session.preview?.selectionChanged(to: range)
+                textView.window?.makeFirstResponder(textView)
+                return true
+            }
             if let url = session.preview?.linkURL(at: point) {
                 openURL?(url)
                 return true
             }
             if let id = session.preview?.attachmentID(at: point), let attachment = session.catalog.attachment(with: id) {
-                if let range = session.preview?.attachmentSelection(for: id), textView.selectedRange() != range {
+                if let range = session.preview?.attachmentSelection(at: point), textView.selectedRange() != range {
                     textView.setSelectedRange(range)
                     textView.window?.makeFirstResponder(textView)
                 } else {
@@ -692,7 +710,8 @@ private struct NoteTextView: NSViewRepresentable {
 
         func perform(_ command: MarkdownCommand) {
             guard let textView else { return }
-            apply(MarkdownEditing.edit(command, in: textView.string, selection: textView.selectedRange()))
+            guard session.apply(MarkdownEditing.edit(command, in: textView.string, selection: textView.selectedRange())) else { return }
+            textView.window?.makeFirstResponder(textView)
         }
 
         func insertBlock(_ markdown: String) {
@@ -779,6 +798,7 @@ private struct NoteTextView: NSViewRepresentable {
             // The caret never rests inside Markdown that is drawn as a checkbox or a table.
             if let adjusted = session.preview?.adjustedSelection(to: textView.selectedRange()) {
                 textView.setSelectedRange(adjusted)
+                session.preview?.selectionChanged(to: textView.selectedRange())
                 return
             }
             session.preview?.selectionChanged(to: textView.selectedRange())

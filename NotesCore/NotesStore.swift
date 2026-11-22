@@ -6,7 +6,7 @@ public enum NotesStore {
     public static let cloudKitContainerID = "iCloud.io.github.uabylbekov.notes"
 
     public static var schema: Schema {
-        Schema(versionedSchema: SchemaV1.self)
+        Schema(versionedSchema: SchemaV2.self)
     }
 
     /// - Parameters:
@@ -22,6 +22,6 @@ public enum NotesStore {
         } else {
             configuration = ModelConfiguration(schema: schema, cloudKitDatabase: .none)
         }
-        return try ModelContainer(for: schema, migrationPlan: NotesMigrationPlan.self, configurations: configuration)
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 }

@@ -117,33 +117,33 @@ extension CodeTheme {
         )
     )
 
-    /// Muted colors on a warm background, from the Solarized palette.
-    public static let solarized = CodeTheme(
-        id: "solarized", name: "Solarized",
-        background: ThemeColor(light: 0xFDF6E3, dark: 0x002B36),
-        text: ThemeColor(light: 0x586E75, dark: 0x93A1A1),
+    /// GitHub's code colors: a light gray block in light mode, GitHub's dark palette in dark mode.
+    public static let github = CodeTheme(
+        id: "github", name: "GitHub",
+        background: ThemeColor(light: 0xF6F8FA, dark: 0x161B22),
+        text: ThemeColor(light: 0x1F2328, dark: 0xE6EDF3),
         tokens: tokens(
-            comment: (0x5D7179, 0x839496), string: (0x207A72, 0x2AA198), keyword: (0x647300, 0x859900),
-            number: (0xC33278, 0xDE68A1), type: (0x886800, 0xB58900), function: (0x2071AC, 0x3F98D8),
-            attribute: (0xBB4514, 0xD97850), constant: (0x6468B4, 0x878BCE), property: (0x2071AC, 0x3F98D8),
-            variable: (0xBB4514, 0xD97850)
+            comment: (0x59636E, 0x8B949E), string: (0x0A3069, 0xA5D6FF), keyword: (0xCF222E, 0xFF7B72),
+            number: (0x0550AE, 0x79C0FF), type: (0x953800, 0xFFA657), function: (0x8250DF, 0xD2A8FF),
+            attribute: (0x0550AE, 0x79C0FF), constant: (0x0550AE, 0x79C0FF), property: (0x0550AE, 0x79C0FF),
+            variable: (0x953800, 0xFFA657)
         )
     )
 
-    /// Maximum contrast, for Increase Contrast users and bright light.
-    public static let highContrast = CodeTheme(
-        id: "high-contrast", name: "High Contrast",
-        background: ThemeColor(light: 0xFFFFFF, dark: 0x000000),
-        text: ThemeColor(light: 0x000000, dark: 0xFFFFFF),
+    /// Monokai's classic dark palette, with the same hues deepened for light mode.
+    public static let monokai = CodeTheme(
+        id: "monokai", name: "Monokai",
+        background: ThemeColor(light: 0xFAFAF5, dark: 0x272822),
+        text: ThemeColor(light: 0x272822, dark: 0xF8F8F2),
         tokens: tokens(
-            comment: (0x4A4A4A, 0xBDBDBD), string: (0x8A1100, 0xFFB4A8), keyword: (0x7A0072, 0xFF9AD5),
-            number: (0x0000A8, 0xFFE27A), type: (0x00494F, 0x7CE8FF), function: (0x004B8D, 0x8CD0FF),
-            attribute: (0x6B3300, 0xFFC27A), constant: (0x3B0A99, 0xD2B4FF), property: (0x005A4A, 0x8FF0DB),
-            variable: (0x004B8D, 0x8CD0FF), boldKeywords: true
+            comment: (0x6E6A58, 0xA39F8A), string: (0x7A6E00, 0xE6DB74), keyword: (0xD4155F, 0xFF5C93),
+            number: (0x7A4FD6, 0xAE81FF), type: (0x00768F, 0x66D9EF), function: (0x3F7300, 0xA6E22E),
+            attribute: (0x3F7300, 0xA6E22E), constant: (0x7A4FD6, 0xAE81FF), property: (0x00768F, 0x66D9EF),
+            variable: (0x272822, 0xF8F8F2)
         )
     )
 
-    public static let builtIn: [CodeTheme] = [.standard, .solarized, .highContrast]
+    public static let builtIn: [CodeTheme] = [.standard, .github, .monokai]
 
     /// The built-in theme with this id, or the standard theme if it is unknown (for example from a newer app version).
     public static func builtIn(id: String) -> CodeTheme {
@@ -162,6 +162,11 @@ public enum FontChoice: Codable, Hashable, Sendable {
     case custom(postScriptName: String, family: String)
 }
 
+/// What the note sits on: the plain system background, or warm paper with a fine grain.
+public enum BackgroundStyle: String, Codable, CaseIterable, Sendable {
+    case plain, paper
+}
+
 public struct AppearanceSettings: Codable, Equatable, Sendable {
     public static let sizeScaleRange = 0.8...1.6
     public static let lineSpacingRange = 0.0...0.6
@@ -173,8 +178,23 @@ public struct AppearanceSettings: Codable, Equatable, Sendable {
     /// Extra space between lines, as a fraction of the font size (F6).
     public var lineSpacing = 0.15
     public var codeThemeID = CodeTheme.standard.id
+    /// Lets the code font join characters such as `->` and `!=` into one symbol. Only Fira Code and JetBrains Mono do it.
+    public var codeLigatures = true
+    public var background = BackgroundStyle.plain
 
     public init() {}
+
+    // Settings written by an older version lack the newer keys. Missing keys keep their defaults instead of failing.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        textFont = try values.decodeIfPresent(FontChoice.self, forKey: .textFont) ?? textFont
+        codeFont = try values.decodeIfPresent(FontChoice.self, forKey: .codeFont) ?? codeFont
+        sizeScale = try values.decodeIfPresent(Double.self, forKey: .sizeScale) ?? sizeScale
+        lineSpacing = try values.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? lineSpacing
+        codeThemeID = try values.decodeIfPresent(String.self, forKey: .codeThemeID) ?? codeThemeID
+        codeLigatures = try values.decodeIfPresent(Bool.self, forKey: .codeLigatures) ?? codeLigatures
+        background = (try? values.decodeIfPresent(BackgroundStyle.self, forKey: .background)) ?? background
+    }
 
     /// Keeps stored values inside their allowed ranges, in case another device wrote something unexpected.
     public func clamped() -> AppearanceSettings {

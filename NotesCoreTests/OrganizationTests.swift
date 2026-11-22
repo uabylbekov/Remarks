@@ -17,6 +17,47 @@ struct OrganizationTests {
 
     // MARK: Scopes
 
+    /// The list loads its notes with `NoteScope.predicate`. With no search text it must pick the same notes, in the
+    /// same order (pinned first, then newest), as `NoteFilter.apply`.
+    @Test func scopePredicatesMatchTheFilterAndItsOrder() throws {
+        let (library, context) = try makeLibrary()
+        let work = try library.createFolder(named: "Work", now: t0)
+        let trashedFolder = try library.createFolder(named: "Old", now: t0)
+        var notes: [Note] = []
+        for index in 0..<12 {
+            let note = library.createNote(body: "Note \(index)", in: index % 3 == 0 ? work : (index % 5 == 0 ? trashedFolder : nil), now: t0.addingTimeInterval(Double(index)))
+            if index % 4 == 0 { note.setPinned(true, now: t0.addingTimeInterval(Double(index))) }
+            if index % 2 == 0 { try library.addTag(named: "swift", to: note, now: t0) }
+            if index % 6 == 5 { library.trash(note, now: t0) }
+            notes.append(note)
+        }
+        try context.save()
+        let swiftTag = try #require(notes[0].tags?.first)
+
+        for scope in [NoteScope.all, .unfiled, .folder(work.id), .folder(trashedFolder.id), .tag(swiftTag.id), .trash] {
+            let expected = NoteFilter.apply(to: notes, scope: scope).map(\.id)
+            func fetch(pinned: Bool) throws -> [UUID] {
+                try context.fetch(FetchDescriptor<Note>(
+                    predicate: scope.predicate(isPinned: pinned),
+                    sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+                )).map(\.id)
+            }
+            #expect(try fetch(pinned: true) + fetch(pinned: false) == expected, "\(scope)")
+        }
+    }
+
+    @Test func aWidenedPredicateSelectsEveryLiveNote() throws {
+        let (library, context) = try makeLibrary()
+        let work = try library.createFolder(named: "Work", now: t0)
+        let inWork = library.createNote(body: "In work", in: work, now: t0)
+        let loose = library.createNote(body: "Loose", now: t0)
+        let trashed = library.createNote(body: "Trashed", now: t0)
+        library.trash(trashed, now: t0)
+        try context.save()
+        let found = try context.fetch(FetchDescriptor<Note>(predicate: NoteScope.folder(work.id).predicate(isPinned: false, widenedToAllNotes: true)))
+        #expect(Set(found.map(\.id)) == [inWork.id, loose.id])
+    }
+
     @Test func scopesSelectTheRightNotes() throws {
         let (library, _) = try makeLibrary()
         let work = try library.createFolder(named: "Work", now: t0)

@@ -1,22 +1,22 @@
 # Spec 07: Attachments
 
-Status: **Built 2026-11-20, except export and paste (see the table below). Scope: images and any file, shown as a file chip you can open.** Milestone: M4 (brought forward at your request).
+Status: **Built 2026-11-20, except VoiceOver labels (see the table below). Scope: images and any file, shown as a file chip you can open.** Milestone: M4 (brought forward at your request).
 Depends on: Spec 01 (data model, additive schema), Spec 02 (sync), Spec 03 (editor), `00-open-questions.md` (B3 export, B5 large blobs).
 
 ## Status of the build (2026-11-20)
 
 | Step | State |
 |---|---|
-| Schema: `Attachment` model, `Note.attachments` | Done, **in place in `SchemaV1`** (not a V2 with a migration), because the app is not released. An existing development store may fail to open after this change: delete the app (or the simulator's data) once. Add a proper V2 stage before the first release |
+| Schema: `Attachment` model, `Note.attachments` | Done in `SchemaV2`, the only schema. There is no V1 and no migration plan: no data existed to migrate |
 | `AttachmentStore` (limits, downscale, Markdown, cleanup) | Done, 16 tests |
 | Cleanup of unreferenced attachments after 30 days | Done, part of the daily maintenance pass |
 | Markdown form, title and snippet | Done. The list shows the attachment's name, not the link |
 | Editor: inline images, file chips, "Waiting for iCloud…" and "Missing attachment" states | Done, checked in previews on iPhone and Mac. The line height depends only on the attachment, never on the caret |
 | Insert: photo library, camera, files, drag and drop of files | Done. Paperclip menu in the Mac toolbar and on the iPhone keyboard bar. **Not verified on a device** |
-| Open: Quick Look on iPhone and iPad | Done. **Mac opens the file in its default app** instead of the Quick Look panel (a later polish) |
-| Paste of images and files | **Not built** |
-| Export to `.md` plus an attachments folder | **Not built** |
-| Alt text editing, VoiceOver labels on pictures | **Not built** (the picture is drawn, not an accessibility element yet) |
+| Open: Quick Look on every platform | Done with SwiftUI's `quickLookPreview`, so the Mac shows the Quick Look panel too |
+| Paste of images and files | Done. Pictures on iPhone and Mac, files on the Mac. Text wins when the clipboard has both. **Not verified on a device** |
+| Export to `.md` plus an attachments folder | Done, in the note menu ("Export as Markdown…"). Links become relative paths, the stored body is not changed. 2 tests. **Not verified on a device** |
+| Alt text editing, VoiceOver labels on pictures | **Not built.** The text view reads the line's raw Markdown, and UIKit and AppKit offer no per-range label for text. Needs its own accessibility element or rotor, which is a separate piece of work |
 
 ## Goal
 
@@ -94,9 +94,8 @@ An **Attachments button** goes on the formatting toolbar (Mac window toolbar and
 
 ## Cleanup (no silent data loss)
 
-- Deleting the Markdown that references an attachment leaves the record in place. A maintenance pass (the same one that purges Recently Deleted) deletes attachments of a live note that are **not referenced in the body** and are older than 30 days. This keeps undo and Version History restorable.
+- Deleting the Markdown that references an attachment leaves the record in place. A maintenance pass (the same one that purges Recently Deleted) deletes attachments of a live note that are **not referenced in the body** and are older than 30 days. This keeps undo working.
 - Trashing a note keeps its attachments. Permanent deletion removes them (cascade).
-- Version History snapshots store only text, so restoring an old version can reference an attachment that has been cleaned up. That shows "Missing attachment". Because of the 30-day grace period, this only happens for old versions.
 
 ## Export (B3)
 
@@ -111,7 +110,7 @@ Export writes each note as a `.md` file plus an `attachments` folder. References
 
 1. **Sync cost.** Each attachment is a CloudKit asset. A note with many large photos syncs slowly on a first install. Mitigation: the limits above and lazy loading. **Verify** with a real iCloud account on cellular.
 2. **Ordering.** The note's text can arrive before the attachment record. The placeholder state above is required, not optional.
-3. **Lightweight migration.** Adding a model and a relationship is additive, so SchemaV1 to SchemaV2 should migrate automatically. **Verify** on a copy of a real store before release.
+3. **Migration.** There is no migration plan yet. Add one with the first schema change after release.
 4. **TextKit 2 attachments.** View providers behave differently on UIKit and AppKit and inside our custom layout fragments. A small spike is needed first (see Build order).
 
 ## Decisions needed

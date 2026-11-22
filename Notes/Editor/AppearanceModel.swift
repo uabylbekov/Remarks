@@ -31,6 +31,14 @@ final class AppearanceModel {
                 self?.reloadFromStorage()
             }
         }
+        #if canImport(UIKit)
+        // The editor's text size follows Dynamic Type (see `EditorTheme`), so an open editor must style again when it changes.
+        Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: UIContentSizeCategory.didChangeNotification) {
+                self?.revision += 1
+            }
+        }
+        #endif
     }
 
     func reset() {

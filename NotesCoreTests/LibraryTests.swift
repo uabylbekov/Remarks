@@ -111,6 +111,54 @@ struct LibraryTests {
         #expect(c.parent == nil)
     }
 
+    @Test func aFolderMovedBeforeASiblingLandsBetweenItsNeighbors() throws {
+        let (library, _) = try makeLibrary()
+        let a = try library.createFolder(named: "A")
+        let b = try library.createFolder(named: "B")
+        let c = try library.createFolder(named: "C")
+        func order() -> [String] { [a, b, c].sorted { $0.sortIndex < $1.sortIndex }.map(\.name) }
+
+        try library.move(c, to: nil, before: b)
+        #expect(order() == ["A", "C", "B"])
+        try library.move(c, to: nil, before: a)
+        #expect(order() == ["C", "A", "B"])
+        try library.move(c, to: nil, before: nil)
+        #expect(order() == ["A", "B", "C"])
+    }
+
+    @Test func aFolderMovedUnderAnotherJoinsItsChildrenInPlace() throws {
+        let (library, _) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent")
+        let first = try library.createFolder(named: "First", in: parent)
+        let second = try library.createFolder(named: "Second", in: parent)
+        let moved = try library.createFolder(named: "Moved")
+
+        try library.move(moved, to: parent, before: second)
+
+        #expect(moved.parent === parent)
+        #expect((parent.children ?? []).sorted { $0.sortIndex < $1.sortIndex }.map(\.name) == ["First", "Moved", "Second"])
+        #expect(first.sortIndex < moved.sortIndex && moved.sortIndex < second.sortIndex)
+    }
+
+    @Test func aFolderCannotBeMovedIntoItsOwnSubtreeWhenReordering() throws {
+        let (library, _) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent")
+        let child = try library.createFolder(named: "Child", in: parent)
+        #expect(throws: LibraryError.wouldCreateCycle) { try library.move(parent, to: child, before: nil) }
+        #expect(parent.parent == nil)
+    }
+
+    @Test func manyInsertionsInTheSameGapKeepTheOrder() throws {
+        let (library, _) = try makeLibrary()
+        let first = try library.createFolder(named: "first")
+        let last = try library.createFolder(named: "last")
+        let inserted = try (0..<40).map { try library.createFolder(named: "f\($0)") }
+        for folder in inserted { try library.move(folder, to: nil, before: last) }
+
+        let order = ([first, last] + inserted).sorted { $0.sortIndex < $1.sortIndex }.map(\.name)
+        #expect(order == ["first"] + (0..<40).map { "f\($0)" } + ["last"])
+    }
+
     @Test func treeWalkTerminatesEvenIfSyncDeliversACycle() throws {
         let (library, context) = try makeLibrary()
         let a = Folder(name: "A", now: t0)

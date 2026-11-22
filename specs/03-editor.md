@@ -63,7 +63,7 @@ Depends on: Spec 01, `spikes/01-editor-spike.md`, `spikes/02-highlighter-spike.m
 7. Fonts and themes from Spec 11 (settings).
 8. Attachment and image syntax (Spec 07).
 9. Find in note, spell check options for code, and an editor toolbar for the Mac.
-10. Local snapshots before an incoming sync overwrites a body (Spec 02, S2).
+10. ~~Local snapshots before an incoming sync overwrites a body (Spec 02, S2).~~ Dropped with Version History (2026-11-21).
 
 ## Acceptance tests
 

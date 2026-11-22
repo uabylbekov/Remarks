@@ -69,6 +69,32 @@ public struct Library {
         folder.parent = newParent
     }
 
+    /// Puts a folder under `parent` (nil is the top level), in front of `sibling`, or at the end when `sibling` is nil.
+    /// Rejects moves that would make a folder its own ancestor. Only the moved folder's `sortIndex` changes: it goes
+    /// halfway between its new neighbors, and a folder that is already first or last goes one step beyond. If repeated
+    /// moves have squeezed the gap too small, the siblings are numbered again.
+    public func move(_ folder: Folder, to parent: Folder?, before sibling: Folder?) throws {
+        try move(folder, to: parent)
+
+        let others = try siblings(of: parent)
+            .filter { $0.id != folder.id && $0.deletedAt == nil }
+            .sorted { $0.sortIndex < $1.sortIndex }
+        guard let sibling, let index = others.firstIndex(where: { $0.id == sibling.id }) else {
+            folder.sortIndex = (others.last?.sortIndex ?? -1) + 1
+            return
+        }
+
+        let next = others[index].sortIndex
+        let previous = index > 0 ? others[index - 1].sortIndex : next - 2
+        if next - previous > 1e-6 {
+            folder.sortIndex = (previous + next) / 2
+        } else {
+            var ordered = others
+            ordered.insert(folder, at: index)
+            for (position, item) in ordered.enumerated() { item.sortIndex = Double(position) }
+        }
+    }
+
     /// Cycle-safe: sync could in theory deliver a cycle, so the walk tracks visited folders.
     public static func isDescendant(_ candidate: Folder, of ancestor: Folder) -> Bool {
         var visited: Set<UUID> = []

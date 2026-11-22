@@ -30,7 +30,10 @@ final class DecorationFragment: NSTextLayoutFragment {
         case "quote":
             context.setFillColor(EditorColor.systemGray.withAlphaComponent(0.6).cgColor)
             // A little taller than the line, so the bars of neighboring quote lines meet.
-            let bar = CGRect(x: left, y: point.y - 2, width: 3, height: layoutFragmentFrame.height + 4)
+            let paragraph = (textElement as? NSTextParagraph)?.attributedString
+            let marker = (paragraph?.string as NSString?)?.range(of: ">").location ?? NSNotFound
+            let markerX = marker != NSNotFound ? textLineFragments.first?.locationForCharacter(at: marker).x ?? 0 : 0
+            let bar = CGRect(x: point.x + markerX, y: point.y - 2, width: 3, height: layoutFragmentFrame.height + 4)
             context.addPath(CGPath(roundedRect: bar, cornerWidth: 1.5, cornerHeight: 1.5, transform: nil))
             context.fillPath()
         case "rule":

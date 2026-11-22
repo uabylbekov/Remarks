@@ -303,3 +303,35 @@ struct NoteFindTests {
         #expect(try await service.find(matching: [.titleEquals("Groceries")]).isEmpty)
     }
 }
+
+/// Spec 06, step 7: what Spotlight is given.
+struct SpotlightTests {
+    @Test func liveNotesLeavesOutTrashedOnes() async throws {
+        let container = try NotesStore.makeContainer(inMemory: true)
+        let service = NotesService(modelContainer: container)
+        let keep = try await service.createNote(text: "Keep me")
+        let drop = try await service.createNote(text: "Drop me")
+        try await service.trash(drop.id)
+
+        let live = try await service.liveNotes()
+        #expect(live.map(\.id) == [keep.id])
+    }
+
+    @Test func indexingIsOnUnlessTheSettingSaysOtherwise() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: SpotlightSettings.key)
+        defer { defaults.set(saved, forKey: SpotlightSettings.key) }
+
+        defaults.removeObject(forKey: SpotlightSettings.key)
+        #expect(SpotlightSettings.isEnabled)
+        defaults.set(false, forKey: SpotlightSettings.key)
+        #expect(!SpotlightSettings.isEnabled)
+    }
+
+    @Test func theEntityKeepsTheTitlePreviewAndTags() {
+        let note = Note(body: "Plan\nShip the editor")
+        let entity = NoteEntity(NoteInfo(note))
+        #expect(entity.title == "Plan")
+        #expect(entity.snippet == "Ship the editor")
+    }
+}

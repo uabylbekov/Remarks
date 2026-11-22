@@ -49,7 +49,7 @@ Legend: [x] done, [ ] to do.
 - [x] T23. Dedupe after each finished CloudKit import (Spec 02 Y4)
 - [x] T24. Purge at launch and daily
 - [x] T25. DEBUG `initializeCloudKitSchema` helper (`-InitializeCloudKitSchema` launch argument) and the release checklist in Spec 02. Not yet run on a device
-- [x] T25b. Local version history (Spec 02 S1, S3, S4, and S2 for open notes)
+- [x] T25b. ~~Local version history (Spec 02 S1, S3, S4, and S2 for open notes)~~ Removed 2026-11-21
 - [ ] T26. Confirm `NotesCore` deployment targets are 27.x
 - [ ] T27. Verify on devices that the existing spike data loads into the new container (same entity names) and that new notes still sync between the Mac and iPhone
 - [ ] T28. Create the CloudKit development schema reset plan (throwaway spike records)

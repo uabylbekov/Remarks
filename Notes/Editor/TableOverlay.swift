@@ -7,6 +7,7 @@ typealias OverlayContainer = UIView
 #else
 import AppKit
 typealias OverlayContainer = NSView
+
 #endif
 
 /// Puts a `TableGridView` over the room that the live preview reserves for each table, and keeps it there as the text
@@ -30,19 +31,15 @@ final class TableOverlay {
     private weak var preview: LivePreviewController?
     /// Where the text container starts inside the text view.
     private let origin: () -> CGPoint
-    /// The text view has the keyboard. The caret at the end of a table is drawn only then.
-    private let isFocused: () -> Bool
-    private var caretView: OverlayContainer?
     private var placed: [UUID: Placed] = [:]
     private var updateScheduled = false
     /// The latest request to put the caret in a table's cell, by table. It stays until the table has its view.
     private var requests: [UUID: TableFocusRequest] = [:]
     private var requestCount = 0
 
-    init(container: OverlayContainer, origin: @escaping () -> CGPoint, isFocused: @escaping () -> Bool = { true }) {
+    init(container: OverlayContainer, origin: @escaping () -> CGPoint) {
         self.container = container
         self.origin = origin
-        self.isFocused = isFocused
     }
 
     func connect(to preview: LivePreviewController?, apply: @escaping (TextEdit) -> Void, placeCaret: @escaping (NSRange) -> Void) {
@@ -82,16 +79,13 @@ final class TableOverlay {
         for entry in placed.values { remove(entry.host) }
         placed.removeAll()
         requests.removeAll()
-        caretView?.isHidden = true
     }
 
     private func update() {
         guard let container, let preview else { return }
         let origin = origin()
-        var seen = Set<UUID>()
 
         for item in preview.gridTables() {
-            seen.insert(item.id)
             let frame = item.frame.offsetBy(dx: origin.x, dy: origin.y)
             let id = item.id
             let request = requests[id]
@@ -131,53 +125,12 @@ final class TableOverlay {
             }
         }
 
-        for (id, entry) in placed where !seen.contains(id) {
+        // Missing geometry during a resize is temporary, not a deleted table.
+        for (id, entry) in placed where preview.showsMarkdown || preview.tableIndex(for: id) == nil {
             remove(entry.host)
             placed[id] = nil
             requests[id] = nil
         }
-        updateCaret(in: container, preview: preview)
-    }
-
-    // MARK: End-of-table caret
-
-    /// The caret at the end of a table. The text there is a hair high, so the text view's own caret cannot be seen, and
-    /// this one is drawn beside the grid at the grid's height.
-    private func updateCaret(in container: OverlayContainer, preview: LivePreviewController) {
-        guard isFocused(), let index = preview.tableWithCaret, let id = preview.tableID(at: index), let entry = placed[id] else {
-            caretView?.isHidden = true
-            return
-        }
-        let view = caretView ?? makeCaretView(in: container)
-        caretView = view
-        view.frame = CGRect(x: entry.frame.maxX + LivePreviewController.tableGutter / 2 - 1, y: entry.frame.minY, width: 2, height: entry.frame.height)
-        view.isHidden = false
-    }
-
-    private func makeCaretView(in container: OverlayContainer) -> OverlayContainer {
-        let view = OverlayContainer()
-        #if canImport(UIKit)
-        view.backgroundColor = .tintColor
-        view.layer.cornerRadius = 1
-        #else
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        view.layer?.cornerRadius = 1
-        #endif
-        let blink = CABasicAnimation(keyPath: "opacity")
-        blink.fromValue = 1
-        blink.toValue = 0
-        blink.duration = 0.5
-        blink.autoreverses = true
-        blink.repeatCount = .infinity
-        blink.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        container.addSubview(view)
-        #if canImport(UIKit)
-        view.layer.add(blink, forKey: "blink")
-        #else
-        view.layer?.add(blink, forKey: "blink")
-        #endif
-        return view
     }
 
     // MARK: Platform

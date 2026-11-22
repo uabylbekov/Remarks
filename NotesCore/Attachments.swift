@@ -11,7 +11,7 @@ public enum AttachmentLimits {
     public static let maxPerNote = 20
     /// The longest side of a stored image, in pixels.
     public static let maxImagePixels = 2048
-    /// An attachment that no text refers to is removed after this long, so undo and Version History keep working.
+    /// An attachment that no text refers to is removed after this long, so undo keeps working.
     public static let unreferencedGracePeriod: TimeInterval = 30 * 24 * 60 * 60
 }
 
@@ -22,9 +22,9 @@ public enum AttachmentError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .tooLarge: String(localized: "That file is larger than 25 MB.")
-        case .tooMany: String(localized: "A note can have up to 20 attachments.")
-        case .unreadable: String(localized: "That file could not be read.")
+        case .tooLarge: String(localized: "That file is larger than 25 MB.", bundle: #bundle)
+        case .tooMany: String(localized: "A note can have up to 20 attachments.", bundle: #bundle)
+        case .unreadable: String(localized: "That file could not be read.", bundle: #bundle)
         }
     }
 }
@@ -102,13 +102,16 @@ public enum ImagePreparation {
             kCGImageSourceThumbnailMaxPixelSize: AttachmentLimits.maxImagePixels,
         ]
         guard let scaled = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        // JPEG has no transparency, so an image with an alpha channel stays PNG.
+        // shortcut: opaque screenshots also carry an alpha channel and stay PNG, so they sync larger. Scan for real transparency if sync gets slow.
+        let outputType: UTType = (properties[kCGImagePropertyHasAlpha] as? Bool) == true ? .png : .jpeg
         let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        guard let destination = CGImageDestinationCreateWithData(output, outputType.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, scaled, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return PreparedImage(
             data: output as Data,
-            typeIdentifier: UTType.jpeg.identifier,
+            typeIdentifier: outputType.identifier,
             pixelWidth: scaled.width,
             pixelHeight: scaled.height
         )
@@ -213,5 +216,46 @@ extension MarkdownEditing {
             replacement: replacement,
             selection: NSRange(location: caret, length: 0)
         )
+    }
+}
+
+// MARK: - Export
+
+/// One attachment file in an export, with its path relative to the note's Markdown file.
+public struct ExportedFile: Sendable {
+    public let path: String
+    public let data: Data
+}
+
+/// A note ready to be written to disk: standard Markdown, plus the files it points at.
+public struct ExportedNote: Sendable {
+    /// A name safe to use for the folder and the `.md` file.
+    public let name: String
+    /// The body with every `attachment://id` replaced by a relative path such as `attachments/1A2B3C4D-Beach.png`.
+    public let markdown: String
+    public let files: [ExportedFile]
+}
+
+public enum NoteExporter {
+    /// The stored body is never changed. The returned copy uses relative links, so any Markdown app can open it.
+    public static func export(_ note: Note) -> ExportedNote {
+        var markdown = note.body
+        var files: [ExportedFile] = []
+        for attachment in note.attachments ?? [] {
+            guard let data = attachment.data else { continue }
+            let fileName = "\(attachment.id.uuidString.prefix(8))-\(safeName(attachment.fileName.isEmpty ? "Attachment" : attachment.fileName))"
+            let path = "attachments/\(fileName)"
+            let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+            markdown = markdown.replacingOccurrences(of: "attachment://\(attachment.id.uuidString)", with: encoded, options: .caseInsensitive)
+            files.append(ExportedFile(path: path, data: data))
+        }
+        let title = note.title.isEmpty ? "Note" : note.title
+        return ExportedNote(name: safeName(String(title.prefix(60))), markdown: markdown, files: files)
+    }
+
+    private static func safeName(_ name: String) -> String {
+        let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        let cleaned = name.components(separatedBy: forbidden).joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Note" : cleaned
     }
 }

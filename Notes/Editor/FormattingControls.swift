@@ -149,8 +149,9 @@ struct KeyboardFormattingBar: View {
                 .padding(.trailing, 4)
         }
         .labelStyle(.iconOnly)
-        .buttonStyle(.plain)
-        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuStyle(.borderlessButton)
+        .controlSize(.large)
         .frame(height: 48)
         .glassEffect(.regular.interactive(), in: .capsule)
     }

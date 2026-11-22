@@ -18,37 +18,30 @@ struct TableElement: MarkdownElement {
 
     // MARK: Grid
 
-    /// The first row of a grid holds the room for the table view, and the rows after it take none. Their text is hidden,
-    /// and what is stored never changes. The room is paragraph spacing before the first row, not line height, so every
-    /// line stays a hair high and there is no gap between the lines of the table: a selection over the table is as high
-    /// as its lines. A gap between selected lines is painted as a band, which is what a selection that ended inside the
-    /// room would have been, the size of the grid. The text of the first row is right-aligned, so the end of the row is beside the grid. That is where the caret
-    /// rests "at the end of the table". The text view's own caret there is too small to see, and `TableOverlay` draws a
-    /// caret as tall as the table. The height depends only on the table, never on the caret.
+    /// A native attachment reserves the first row's full height, including at document start.
+    /// Remaining source rows stay collapsed; their UTF-16 positions remain available to editing and undo.
     private func styleGridRow(_ paragraph: NSMutableAttributedString, isFirst: Bool, table: MarkdownTable, services: ElementServices) {
         let full = NSRange(location: 0, length: paragraph.length)
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = 0.01
-        style.maximumLineHeight = 0.01
-        style.paragraphSpacingBefore = isFirst ? TableGridView.height(for: table) + 2 * LivePreviewController.cardMargin : 0
-        style.paragraphSpacing = 0
-        style.alignment = .right
-        // The text ends just beside the grid, so the caret at the end of the table is drawn there.
-        let gridWidth = TableGridView.width(
-            for: table, in: services.textContainerWidth, padding: services.linePadding, gutter: LivePreviewController.tableGutter
-        )
-        style.tailIndent = gridWidth + LivePreviewController.tableGutter / 2
+        let height = TableGridView.height(for: table)
+        style.minimumLineHeight = isFirst ? height : 0.01
+        style.maximumLineHeight = isFirst ? height : 0.01
+        style.paragraphSpacingBefore = isFirst ? LivePreviewController.cardMargin : 0
+        style.paragraphSpacing = isFirst ? LivePreviewController.cardMargin : 0
         style.lineBreakMode = .byClipping
         paragraph.addAttributes([
             .paragraphStyle: style,
-            .font: EditorFont.systemFont(ofSize: 1),
+            .font: EditorFont.systemFont(ofSize: 0.01),
             .foregroundColor: EditorColor.clear,
         ], range: full)
-        // A click puts the caret at the nearest place in the row's text. Wide spacing after its first character puts the
-        // start of the text well under the grid, so every click beside the grid is nearer the end, which is the end of
-        // the table.
         if isFirst, paragraph.length > 0 {
-            paragraph.addAttribute(.kern, value: 80, range: NSRange(location: 0, length: 1))
+            let width = TableGridView.width(for: table, in: services.textContainerWidth,
+                                            padding: services.linePadding, gutter: LivePreviewController.tableGutter)
+            let anchor = NSRange(location: 0, length: 1)
+            paragraph.replaceCharacters(in: anchor, with: "\u{FFFC}")
+            paragraph.addAttribute(.attachment, value: AttachmentDrawing.placeholder(
+                size: CGSize(width: width + LivePreviewController.tableGutter, height: height)
+            ), range: anchor)
         }
     }
 

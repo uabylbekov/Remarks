@@ -36,6 +36,8 @@ public struct MarkdownTable: Equatable, Sendable {
         guard lines.count >= 2, MarkdownEditing.isTableSeparator(lines[1]) else { return nil }
         let header = Self.cells(of: lines[0])
         let marks = Self.cells(of: lines[1])
+        // A partially typed separator must not activate a grid before all header columns exist.
+        guard marks.count == header.count else { return nil }
         let alignments = (0..<header.count).map { column -> Alignment in
             guard column < marks.count else { return .none }
             let left = marks[column].hasPrefix(":"), right = marks[column].hasSuffix(":")
@@ -118,7 +120,15 @@ public struct MarkdownTable: Equatable, Sendable {
 
     /// A cell is one line, so a line break typed or pasted into it becomes a space.
     private static func clean(_ text: String) -> String {
-        text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        let line = text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        var result = ""
+        var escaped = false
+        for character in line {
+            if character == "|", !escaped { result.append("\\") }
+            result.append(character)
+            escaped = character == "\\" && !escaped
+        }
+        return result
     }
 
     private static func fit<Value>(_ values: [Value], to count: Int, with filler: Value) -> [Value] {
@@ -129,7 +139,9 @@ public struct MarkdownTable: Equatable, Sendable {
     static func cells(of line: String) -> [String] {
         var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("|") { trimmed.removeFirst() }
-        if trimmed.hasSuffix("|"), !trimmed.hasSuffix("\\|") { trimmed.removeLast() }
+        if MarkdownEditing.tablePipeOffsets(in: trimmed as NSString).last == (trimmed as NSString).length - 1 {
+            trimmed.removeLast()
+        }
 
         var cells: [String] = []
         var current = ""

@@ -3,11 +3,9 @@ import NotesCore
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
 #endif
 
-/// Fonts and code themes (Spec 11). A standard `Form`, so it follows the system look on every platform.
+/// How notes look: background, text, and code (Spec 11). A standard `Form`, so it follows the system look on every platform.
 struct AppearanceSettingsView: View {
     @Bindable private var model = AppearanceModel.shared
 
@@ -18,22 +16,24 @@ struct AppearanceSettingsView: View {
             }
 
             Section {
+                Picker("Background", selection: $model.settings.background) {
+                    Text("Plain").tag(BackgroundStyle.plain)
+                    Text("Paper").tag(BackgroundStyle.paper)
+                }
+            } footer: {
+                Text("Paper gives notes a warm background with a fine grain.")
+            }
+
+            Section {
                 FontChoiceRow(
                     title: "Font",
                     choice: $model.settings.textFont,
-                    presets: [.system, .design(.serif), .design(.rounded), .design(.monospaced)],
-                    monospacedOnly: false
+                    presets: [.system, .design(.serif), .design(.rounded), .design(.monospaced)]
                 )
-                VStack(alignment: .leading) {
-                    LabeledContent("Size", value: model.settings.sizeScale.formatted(.percent.precision(.fractionLength(0))))
-                    Slider(value: $model.settings.sizeScale, in: AppearanceSettings.sizeScaleRange, step: 0.05) {
-                        Text("Size")
-                    } minimumValueLabel: {
-                        Image(systemName: "textformat.size.smaller")
-                    } maximumValueLabel: {
-                        Image(systemName: "textformat.size.larger")
-                    }
-                }
+                SliderRow(title: "Size", value: $model.settings.sizeScale, range: AppearanceSettings.sizeScaleRange,
+                          lowSymbol: "textformat.size.smaller", highSymbol: "textformat.size.larger")
+                SliderRow(title: "Line Spacing", value: $model.settings.lineSpacing, range: AppearanceSettings.lineSpacingRange,
+                          lowSymbol: "text.alignleft", highSymbol: "text.justify.leading")
             } header: {
                 Text("Text")
             } footer: {
@@ -45,18 +45,14 @@ struct AppearanceSettingsView: View {
                     title: "Font",
                     choice: $model.settings.codeFont,
                     presets: CodeFonts.all.map(\.choice),
-                    monospacedOnly: true,
                     displayName: { CodeFonts.option(for: $0)?.name }
                 )
-                Picker("Theme", selection: $model.settings.codeThemeID) {
-                    ForEach(CodeTheme.builtIn) { theme in
-                        Text(theme.name).tag(theme.id)
-                    }
-                }
+                Toggle("Ligatures", isOn: $model.settings.codeLigatures)
+                ThemeSwatches(selection: $model.settings.codeThemeID)
             } header: {
                 Text("Code")
             } footer: {
-                Text("Fira Code, JetBrains Mono, and IBM Plex Mono come with the app under the SIL Open Font License. Themes follow light and dark appearance.")
+                Text("Fira Code, JetBrains Mono, and IBM Plex Mono come with the app under the SIL Open Font License. Ligatures join characters such as -> and != into one symbol, in the fonts that support them. Themes follow light and dark appearance.")
             }
 
             Section {
@@ -66,9 +62,6 @@ struct AppearanceSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Appearance")
-        #if os(macOS)
-        .frame(minWidth: 420, idealWidth: 460, minHeight: 520)
-        #endif
     }
 }
 
@@ -78,10 +71,8 @@ private struct FontChoiceRow: View {
     let title: LocalizedStringKey
     @Binding var choice: FontChoice
     let presets: [FontChoice]
-    let monospacedOnly: Bool
     /// A friendlier name for a choice, when the caller has one (the code fonts do).
     var displayName: (FontChoice) -> String? = { _ in nil }
-    @State private var showsFontPicker = false
 
     private func name(of choice: FontChoice) -> String {
         displayName(choice) ?? Self.name(of: choice)
@@ -92,31 +83,11 @@ private struct FontChoiceRow: View {
             ForEach(presets, id: \.self) { preset in
                 Text(name(of: preset)).tag(preset)
             }
-            if case .custom = choice, !presets.contains(choice) {
+            // A font saved by an older version, or from another device, that is no longer offered.
+            if !presets.contains(choice) {
                 Text(name(of: choice)).tag(choice)
             }
         }
-
-        #if canImport(UIKit)
-        Button("Choose Installed Font…") { showsFontPicker = true }
-            .sheet(isPresented: $showsFontPicker) {
-                FontPicker(monospacedOnly: monospacedOnly) { picked in
-                    choice = picked
-                }
-                .ignoresSafeArea()
-            }
-        #else
-        Menu("Choose Installed Font…") {
-            ForEach(Self.installedFamilies(monospacedOnly: monospacedOnly), id: \.self) { family in
-                Button(family) {
-                    if let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12) {
-                        choice = .custom(postScriptName: font.fontName, family: family)
-                    }
-                }
-            }
-        }
-        #endif
-
         if !EditorTheme.isAvailable(choice) {
             // Spec 11, F4: say why the text looks different, instead of failing silently.
             Label("This font isn't installed on this device, so the system font is used.", systemImage: "exclamationmark.triangle")
@@ -125,7 +96,7 @@ private struct FontChoiceRow: View {
         }
     }
 
-    static func name(of choice: FontChoice) -> String {
+    private static func name(of choice: FontChoice) -> String {
         switch choice {
         case .system: String(localized: "System")
         case .design(.serif): String(localized: "Serif")
@@ -134,81 +105,36 @@ private struct FontChoiceRow: View {
         case .custom(_, let family): family
         }
     }
-
-    #if canImport(AppKit)
-    private static func installedFamilies(monospacedOnly: Bool) -> [String] {
-        let manager = NSFontManager.shared
-        guard monospacedOnly else { return manager.availableFontFamilies }
-        return manager.availableFontFamilies.filter { family in
-            manager.font(withFamily: family, traits: [], weight: 5, size: 12)?.isFixedPitch == true
-        }
-    }
-    #endif
 }
-
-#if canImport(UIKit)
-/// The system font picker. It lists system fonts and fonts the user installed.
-private struct FontPicker: UIViewControllerRepresentable {
-    let monospacedOnly: Bool
-    let onPick: (FontChoice) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeUIViewController(context: Context) -> UIFontPickerViewController {
-        let configuration = UIFontPickerViewController.Configuration()
-        configuration.filteredTraits = monospacedOnly ? .traitMonoSpace : []
-        configuration.includeFaces = false
-        let controller = UIFontPickerViewController(configuration: configuration)
-        controller.delegate = context.coordinator
-        return controller
-    }
-
-    func updateUIViewController(_ controller: UIFontPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIFontPickerViewControllerDelegate {
-        let parent: FontPicker
-        init(_ parent: FontPicker) { self.parent = parent }
-
-        func fontPickerViewControllerDidPickFont(_ viewController: UIFontPickerViewController) {
-            if let descriptor = viewController.selectedFontDescriptor {
-                let font = UIFont(descriptor: descriptor, size: 12)
-                parent.onPick(.custom(postScriptName: font.fontName, family: font.familyName))
-            }
-            parent.dismiss()
-        }
-
-        func fontPickerViewControllerDidCancel(_ viewController: UIFontPickerViewController) {
-            parent.dismiss()
-        }
-    }
-}
-#endif
 
 // MARK: - Preview
 
 /// A real sample in the chosen fonts and theme (Spec 11, F7), built with the same colors the editor uses.
 private struct AppearancePreview: View {
+    /// Not read directly: the editor's theme reads the same settings, and passing them in makes the preview redraw on a change.
     let settings: AppearanceSettings
 
     private static let sample = """
-    // Fetch a note
     func note(id: Int) -> String {
-        let title = "Groceries"
-        return title
+        // Fetch a note
+        return "Groceries"
     }
     """
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("The quick brown fox jumps over the lazy dog.")
+            Text("Groceries")
+                .font(Font(EditorTheme.headingFont(level: 1) as CTFont))
+            Text("Pick up fresh bread, olive oil, and anything else that looks good at the market.")
                 .font(Font(EditorTheme.proseFont as CTFont))
+                .lineSpacing(EditorTheme.bodyParagraphStyle.lineSpacing)
             Text(codeSample)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(Color(EditorTheme.codeBackground), in: .rect(cornerRadius: 8))
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private var codeSample: AttributedString {
@@ -224,6 +150,86 @@ private struct AppearancePreview: View {
             }
         }
         return text
+    }
+}
+
+// MARK: - Slider row
+
+/// A name with its current value, and a slider under it. The slider's own label is hidden because the row already shows it.
+private struct SliderRow: View {
+    let title: LocalizedStringKey
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let lowSymbol: String
+    let highSymbol: String
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            LabeledContent(title, value: value.formatted(.percent.precision(.fractionLength(0))))
+            Slider(value: $value, in: range, step: 0.05) {
+                Text(title)
+            } minimumValueLabel: {
+                Image(systemName: lowSymbol)
+            } maximumValueLabel: {
+                Image(systemName: highSymbol)
+            }
+            .labelsHidden()
+        }
+    }
+}
+
+// MARK: - Theme swatches
+
+/// The code themes as small samples of their own colors, so a theme is chosen by looking at it.
+private struct ThemeSwatches: View {
+    @Binding var selection: String
+
+    var body: some View {
+        LabeledContent("Theme") {
+            HStack(spacing: 12) {
+                ForEach(CodeTheme.builtIn) { theme in
+                    Button { selection = theme.id } label: { swatch(theme) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+        .accessibilityRepresentation {
+            Picker("Theme", selection: $selection) {
+                ForEach(CodeTheme.builtIn) { Text($0.name).tag($0.id) }
+            }
+        }
+    }
+
+    /// The same dynamic colors the editor uses, so a swatch follows light and dark like the code block does.
+    private func color(_ themeColor: ThemeColor) -> Color {
+        Color(EditorTheme.color(themeColor))
+    }
+
+    private func swatch(_ theme: CodeTheme) -> some View {
+        let isSelected = selection == theme.id
+        return VStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Aa")
+                    .font(.system(.footnote, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(color(theme.text))
+                HStack(spacing: 3) {
+                    ForEach([SyntaxScope.keyword, .string, .function, .number], id: \.self) { scope in
+                        Circle()
+                            .fill(theme.style(for: scope).map { color($0.color) } ?? color(theme.text))
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            }
+            .padding(8)
+            .background(color(theme.background), in: .rect(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isSelected ? 2.5 : 1)
+            }
+            Text(theme.name)
+                .font(.caption2)
+                .foregroundStyle(isSelected ? .primary : .secondary)
+        }
     }
 }
 

@@ -11,12 +11,12 @@ struct AttachmentTests {
         ModelContext(try NotesStore.makeContainer(inMemory: true))
     }
 
-    /// A solid-colour PNG of the given size.
-    private func pngData(width: Int, height: Int) throws -> Data {
+    /// A solid-colour PNG of the given size, with or without an alpha channel.
+    private func pngData(width: Int, height: Int, opaque: Bool = false) throws -> Data {
         let space = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bitmapInfo: (opaque ? CGImageAlphaInfo.noneSkipLast : .premultipliedLast).rawValue
         ))
         context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.9, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
@@ -69,6 +69,18 @@ struct AttachmentTests {
         #expect(derived.snippet == "Beach Sunny")
     }
 
+    @Test func aTitleAndSnippetShowTableCellsNotPipesOrTheSeparatorRow() {
+        let derived = NoteText.derive(from: "| Name | Age |\n| --- | :-: |\n| Ann | 31 |\n|  |  |")
+        #expect(derived.title == "Name Age")
+        #expect(derived.snippet == "Ann 31")
+    }
+
+    @Test func aTitleAndSnippetShowTextNotInlineMarks() {
+        let derived = NoteText.derive(from: "**Plan** for `code`\nSee [docs](https://x.dev), _soon_ and ~~not~~ https://y.dev")
+        #expect(derived.title == "Plan for code")
+        #expect(derived.snippet == "See docs, soon and not https://y.dev")
+    }
+
     @Test func insertingAtTheStartOfALineAddsOnlyATrailingNewline() {
         let edit = MarkdownEditing.insertBlock("![x](attachment://A)", in: "Hello\n", selection: NSRange(location: 6, length: 0))
         #expect(edit.replacement == "![x](attachment://A)\n")
@@ -115,11 +127,21 @@ struct AttachmentTests {
         let context = try makeContext()
         let note = Library(context: context).createNote()
         let attachment = try AttachmentStore(context: context).add(
-            data: try pngData(width: 4000, height: 1000), fileName: "Wide.png", typeIdentifier: UTType.png.identifier, to: note
+            data: try pngData(width: 4000, height: 1000, opaque: true), fileName: "Wide.png", typeIdentifier: UTType.png.identifier, to: note
         )
         #expect(attachment.pixelWidth == AttachmentLimits.maxImagePixels)
         #expect(attachment.pixelHeight == AttachmentLimits.maxImagePixels / 4)
         #expect(attachment.typeIdentifier == UTType.jpeg.identifier)
+    }
+
+    @Test func aLargeImageWithTransparencyStaysPNG() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: try pngData(width: 4000, height: 1000), fileName: "Logo.png", typeIdentifier: UTType.png.identifier, to: note
+        )
+        #expect(attachment.pixelWidth == AttachmentLimits.maxImagePixels)
+        #expect(attachment.typeIdentifier == UTType.png.identifier)
     }
 
     @Test func aFileOverTheLimitIsRefusedAndNothingIsAdded() throws {
@@ -151,6 +173,33 @@ struct AttachmentTests {
         #expect(throws: AttachmentError.tooMany) {
             try store.add(data: Data([1]), fileName: "extra", typeIdentifier: UTType.data.identifier, to: note)
         }
+    }
+
+    // MARK: Export
+
+    @Test func exportRewritesLinksToRelativePathsAndKeepsTheStoredBody() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1, 2, 3]), fileName: "Q1 plan.pdf", typeIdentifier: UTType.pdf.identifier, to: note
+        )
+        let markdown = AttachmentStore.markdown(for: attachment)
+        note.setBody("# Plan\n\(markdown)\n")
+
+        let exported = NoteExporter.export(note)
+        let prefix = attachment.id.uuidString.prefix(8)
+        #expect(exported.markdown.contains("(attachments/\(prefix)-Q1%20plan.pdf)"))
+        #expect(!exported.markdown.contains("attachment://"))
+        #expect(exported.files.map(\.path) == ["attachments/\(prefix)-Q1 plan.pdf"])
+        #expect(exported.files.first?.data == Data([1, 2, 3]))
+        #expect(exported.name == "Plan")
+        #expect(note.body.contains("attachment://"))
+    }
+
+    @Test func exportCleansUnsafeCharactersInNames() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote(body: "a/b: c?")
+        #expect(NoteExporter.export(note).name == "a-b- c-")
     }
 
     // MARK: Cleanup

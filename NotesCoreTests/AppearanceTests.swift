@@ -13,7 +13,7 @@ struct AppearanceTests {
         var settings = AppearanceSettings()
         settings.textFont = .custom(postScriptName: "Georgia", family: "Georgia")
         settings.codeFont = .design(.monospaced)
-        settings.codeThemeID = "solarized"
+        settings.codeThemeID = "monokai"
         let data = try JSONEncoder().encode(settings)
         #expect(try JSONDecoder().decode(AppearanceSettings.self, from: data) == settings)
     }
@@ -40,10 +40,10 @@ struct AppearanceTests {
         AppearanceStorage(local: local, cloud: nil).save(onThisDevice)
 
         var fromOtherDevice = AppearanceSettings()
-        fromOtherDevice.codeThemeID = "solarized"
+        fromOtherDevice.codeThemeID = "monokai"
         AppearanceStorage(local: MemoryStorage(), cloud: cloud).save(fromOtherDevice)
 
-        #expect(AppearanceStorage(local: local, cloud: cloud).load().codeThemeID == "solarized")
+        #expect(AppearanceStorage(local: local, cloud: cloud).load().codeThemeID == "monokai")
     }
 
     @Test func fallsBackToLocalThenDefaults() {
@@ -108,3 +108,22 @@ struct CodeFontTests {
         #expect(CodeFonts.option(for: .custom(postScriptName: "Unknown", family: "Unknown")) == nil)
     }
 }
+
+struct AppearanceCompatibilityTests {
+    @Test func settingsSavedBeforeLigaturesWereAddedStillLoad() throws {
+        let old = #"{"textFont":{"system":{}},"codeFont":{"design":{"_0":"monospaced"}},"sizeScale":1.2,"lineSpacing":0.3,"codeThemeID":"solarized"}"#
+        let settings = try JSONDecoder().decode(AppearanceSettings.self, from: Data(old.utf8))
+        #expect(settings.sizeScale == 1.2)
+        #expect(settings.lineSpacing == 0.3)
+        #expect(settings.codeThemeID == "solarized")
+        #expect(settings.codeLigatures)
+    }
+
+    @Test func ligaturesRoundTrip() throws {
+        var settings = AppearanceSettings()
+        settings.codeLigatures = false
+        let data = try JSONEncoder().encode(settings)
+        #expect(try JSONDecoder().decode(AppearanceSettings.self, from: data).codeLigatures == false)
+    }
+}
+

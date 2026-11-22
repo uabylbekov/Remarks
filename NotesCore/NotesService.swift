@@ -120,6 +120,11 @@ public actor NotesService {
         return ids.compactMap { byID[$0] }.filter { $0.deletedAt == nil }.map(NoteInfo.init)
     }
 
+    /// Every note that is not in Recently Deleted. For Spotlight indexing, which only keeps titles and previews.
+    public func liveNotes() throws -> [NoteInfo] {
+        try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil })).map(NoteInfo.init)
+    }
+
     /// The most recently changed notes, pinned first. Bounded, so it is cheap to call often.
     public func recentNotes(limit: Int = 20) throws -> [NoteInfo] {
         // A fetch limit of 0 means "no limit" to SwiftData, so ask for nothing explicitly.
@@ -175,9 +180,8 @@ public actor NotesService {
     }
 
     public func folders(withIDs ids: [UUID]) throws -> [FolderInfo] {
-        let wanted = Set(ids)
-        let all = try folders()
-        return ids.compactMap { id in all.first { $0.id == id && wanted.contains($0.id) } }
+        let byID = Dictionary(try folders().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { byID[$0] }
     }
 
     // MARK: Lookup

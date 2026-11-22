@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// Where a note list is looking (Spec 04). Virtual folders are queries, not stored data.
 public enum NoteScope: Hashable, Sendable {
@@ -9,17 +10,39 @@ public enum NoteScope: Hashable, Sendable {
     case trash
 }
 
+extension NoteScope {
+    /// The notes that belong in this scope, as a database predicate, so a `@Query` can load just them.
+    /// Use it twice, with `isPinned` true and false, to get pinned notes first without sorting by a `Bool`.
+    /// `widenedToAllNotes` is for a search that looks everywhere: every note that is not in Recently Deleted.
+    /// Without a search text this selects exactly what `NoteFilter.apply` selects.
+    public func predicate(isPinned: Bool, widenedToAllNotes: Bool = false) -> Predicate<Note> {
+        switch self {
+        case .trash:
+            return #Predicate { $0.deletedAt != nil && $0.isPinned == isPinned }
+        case .all:
+            return #Predicate { $0.deletedAt == nil && $0.isPinned == isPinned }
+        case _ where widenedToAllNotes:
+            return #Predicate { $0.deletedAt == nil && $0.isPinned == isPinned }
+        case .unfiled:
+            return #Predicate { $0.deletedAt == nil && $0.folder == nil && $0.isPinned == isPinned }
+        case .folder(let id):
+            return #Predicate { $0.deletedAt == nil && $0.folder?.id == id && $0.isPinned == isPinned }
+        case .tag(let id):
+            return #Predicate { $0.deletedAt == nil && $0.tags?.contains { $0.id == id } == true && $0.isPinned == isPinned }
+        }
+    }
+}
+
 public enum NoteSearch {
     /// Splits a query into words. Every word must match.
     public static func words(in query: String) -> [String] {
         query.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
-    private static let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-
-    /// Whether `text` contains `word`, ignoring case and accents.
+    /// Whether `text` contains `word`, ignoring case and accents. This is the system's own search comparison for
+    /// user-facing text, and it is much faster than `range(of:options:)` with the same options.
     public static func contains(_ text: String, _ word: String) -> Bool {
-        text.range(of: word, options: options) != nil
+        text.localizedStandardContains(word)
     }
 
     /// A short excerpt of `body` around the first match of any query word, with ellipses where it was cut.
@@ -27,7 +50,7 @@ public enum NoteSearch {
     public static func snippet(in body: String, query: String, radius: Int = 60) -> String? {
         let flattened = body.replacingOccurrences(of: "\n", with: " ")
         for word in words(in: query) {
-            guard let match = flattened.range(of: word, options: options) else { continue }
+            guard let match = flattened.localizedStandardRange(of: word) else { continue }
             let start = flattened.index(match.lowerBound, offsetBy: -radius, limitedBy: flattened.startIndex) ?? flattened.startIndex
             let end = flattened.index(match.upperBound, offsetBy: radius, limitedBy: flattened.endIndex) ?? flattened.endIndex
             var excerpt = String(flattened[start..<end]).trimmingCharacters(in: .whitespaces)

@@ -3,37 +3,34 @@ import SwiftData
 import NotesCore
 
 /// The middle column: the notes in the selected place, with search (Spec 04).
+/// This view owns the search field. The notes themselves are loaded by `NoteResultsList`, which is rebuilt with a
+/// new query whenever the place or the reach of the search changes.
 struct NoteListView: View {
     let scope: NoteScope
     @Binding var selectedNoteID: UUID?
 
-    @Environment(\.modelContext) private var context
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #endif
-    @Query(sort: \Note.modifiedAt, order: .reverse) private var allNotes: [Note]
     @Query private var folders: [Folder]
     @Query private var tags: [Tag]
     @State private var searchText = ""
     @State private var searchEverywhere = true
-    @State private var tagTarget: Note?
-    @State private var historyTarget: Note?
-    @State private var confirmsEmptyTrash = false
 
-    private var library: Library { Library(context: context) }
-    private var isSearching: Bool { !NoteSearch.words(in: searchText).isEmpty }
-
-    private var results: [Note] {
-        NoteFilter.apply(to: allNotes, scope: scope, query: searchText, searchEverywhere: searchEverywhere)
-    }
-
-    private var title: String {
+    private var title: Text {
         switch scope {
-        case .all: "All Notes"
-        case .unfiled: "Unfiled"
-        case .folder(let id): folders.first { $0.id == id }?.name ?? "Folder"
-        case .tag(let id): tags.first { $0.id == id }?.name ?? "Tag"
-        case .trash: "Recently Deleted"
+        case .all: Text("All Notes")
+        case .unfiled: Text("Unfiled")
+        case .folder(let id):
+            if let folder = folders.first(where: { $0.id == id }) {
+                Text(verbatim: folder.name)
+            } else {
+                Text("Folder")
+            }
+        case .tag(let id):
+            if let tag = tags.first(where: { $0.id == id }) {
+                Text(verbatim: tag.name)
+            } else {
+                Text("Tag")
+            }
+        case .trash: Text("Recently Deleted")
         }
     }
 
@@ -45,74 +42,113 @@ struct NoteListView: View {
         }
     }
 
-    /// Where the editor sits beside the list, an empty editor column looks different from a full one. Showing the first
-    /// note keeps the toolbar the same. On a phone the editor replaces the list, so nothing is opened on its own.
-    private var opensFirstNote: Bool {
-        #if os(iOS)
-        sizeClass != .compact
-        #else
-        true
-        #endif
+    var body: some View {
+        NoteResultsList(
+            scope: scope,
+            selectedNoteID: $selectedNoteID,
+            title: title,
+            searchText: $searchText,
+            searchEverywhere: searchEverywhere
+        )
+        .searchable(text: $searchText, prompt: "Search notes")
+        .searchScopes($searchEverywhere) {
+            if showsSearchScopes {
+                Text("All Notes").tag(true)
+                title.tag(false)
+            }
+        }
+    }
+}
+
+/// The list of notes. The database does the filtering and ordering: one query for the pinned notes and one for the
+/// rest, each limited to the scope, newest first. Without a search nothing here scans the notes, so a save while typing
+/// does not cost more as the library grows. Only a search ranks the loaded notes in memory.
+private struct NoteResultsList: View {
+    let scope: NoteScope
+    @Binding var selectedNoteID: UUID?
+    let title: Text
+    @Binding var searchText: String
+    let searchEverywhere: Bool
+
+    @Environment(\.modelContext) private var context
+    @Query private var pinned: [Note]
+    @Query private var unpinned: [Note]
+    @Query private var folders: [Folder]
+    @Query private var tags: [Tag]
+    @State private var tagTarget: Note?
+    @State private var exportTarget: Note?
+    @State private var deleteForeverTarget: Note?
+    @State private var confirmsEmptyTrash = false
+    @State private var errorMessage: String?
+
+    private var library: Library { Library(context: context) }
+    private var isSearching: Bool { !NoteSearch.words(in: searchText).isEmpty }
+
+    init(scope: NoteScope, selectedNoteID: Binding<UUID?>, title: Text, searchText: Binding<String>, searchEverywhere: Bool) {
+        self.scope = scope
+        self._selectedNoteID = selectedNoteID
+        self.title = title
+        self._searchText = searchText
+        self.searchEverywhere = searchEverywhere
+        // A search that looks everywhere needs every live note, whatever the scope is.
+        let widened = searchEverywhere && !NoteSearch.words(in: searchText.wrappedValue).isEmpty
+        _pinned = Query(filter: scope.predicate(isPinned: true, widenedToAllNotes: widened), sort: \Note.modifiedAt, order: .reverse)
+        _unpinned = Query(filter: scope.predicate(isPinned: false, widenedToAllNotes: widened), sort: \Note.modifiedAt, order: .reverse)
     }
 
-    private func selectFirstNoteIfNeeded() {
-        guard opensFirstNote, !results.contains(where: { $0.id == selectedNoteID }), let first = results.first else { return }
-        selectedNoteID = first.id
+    /// What the list shows: pinned notes first, then the rest, or the ranked matches while searching.
+    private var results: [Note] {
+        let loaded = pinned + unpinned
+        guard isSearching else { return loaded }
+        return NoteFilter.apply(to: loaded, scope: scope, query: searchText, searchEverywhere: searchEverywhere)
     }
 
     var body: some View {
-        let list = noteList
-            .searchable(text: $searchText, prompt: "Search notes")
-        if showsSearchScopes {
-            list.searchScopes($searchEverywhere) {
-                Text("All Notes").tag(true)
-                Text(title).tag(false)
+        let results = results
+        noteList(results)
+            .onChange(of: ResultsKey(count: results.count, scope: scope, query: searchText, everywhere: searchEverywhere), initial: true) {
+                // A note that left the list (trashed, moved, no longer matching) cannot stay selected.
+                if let selectedNoteID, !results.contains(where: { $0.id == selectedNoteID }) {
+                    self.selectedNoteID = nil
+                }
             }
-        } else {
-            list
-        }
     }
 
-    private var noteList: some View {
+    private func noteList(_ results: [Note]) -> some View {
         List(selection: $selectedNoteID) {
             ForEach(results) { note in
-                NoteRow(note: note, query: searchText, showsFolder: scope == .all || isSearching)
-                    .tag(note.id)
+                NavigationLink(value: note.id) {
+                    NoteRow(note: note, query: searchText, showsFolder: scope == .all || isSearching)
+                }
+                    // Dragged onto a folder in the sidebar, the note moves there.
+                    .draggable(NoteReference(id: note.id))
                     .swipeActions(edge: .leading) {
                         if note.deletedAt != nil {
-                            Button("Restore", systemImage: "arrow.uturn.backward") { library.restore(note) }.tint(.blue)
+                            Button("Restore", systemImage: "arrow.uturn.backward") { perform { library.restore(note) } }
                         } else {
                             Button(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin") {
-                                note.setPinned(!note.isPinned)
+                                perform { note.setPinned(!note.isPinned) }
                             }
-                            .tint(.orange)
                         }
                     }
                     .swipeActions(edge: .trailing) {
                         if note.deletedAt != nil {
-                            Button("Delete Forever", systemImage: "trash", role: .destructive) { deleteForever(note) }
+                            Button("Delete Forever", systemImage: "trash", role: .destructive) { deleteForeverTarget = note }
                         } else {
                             Button("Delete", systemImage: "trash", role: .destructive) { trash(note) }
                         }
                     }
                     .contextMenu {
-                        NoteActionsMenu(note: note, onNewTag: { tagTarget = note }, onShowHistory: { historyTarget = note })
+                        NoteActionsMenu(note: note, onNewTag: { tagTarget = note }, onExport: { exportTarget = note }, onDeleteForever: { deleteForeverTarget = note }, onError: { errorMessage = $0 })
                     }
             }
         }
-        #if os(iOS)
-        // The same rounded, divider-free rows as the folder list in the sidebar. (On the Mac, a middle-column list
-        // already looks like that, and the sidebar style crashes SwiftUI there.)
-        .listStyle(.sidebar)
-        #endif
-        .onChange(of: results.map(\.id), initial: true) { selectFirstNoteIfNeeded() }
-        .onChange(of: selectedNoteID) { selectFirstNoteIfNeeded() }
         .navigationTitle(title)
         .toolbar {
             if scope == .trash {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Empty", systemImage: "trash.slash") { confirmsEmptyTrash = true }
-                        .disabled(results.isEmpty)
+                        .disabled(pinned.isEmpty && unpinned.isEmpty && !folders.contains { $0.deletedAt != nil })
                 }
             } else {
                 #if os(macOS)
@@ -129,18 +165,35 @@ struct NoteListView: View {
                 #endif
             }
         }
-        .overlay { emptyState }
+        .overlay { emptyState(results) }
         .newTagPrompt(for: $tagTarget)
-        .versionHistorySheet(for: $historyTarget)
-        .confirmationDialog("Delete all notes in Recently Deleted forever?", isPresented: $confirmsEmptyTrash, titleVisibility: .visible) {
+        .noteExport(for: $exportTarget)
+        .deleteForeverConfirmation(for: $deleteForeverTarget)
+        .confirmationDialog("Delete all notes and folders in Recently Deleted forever?", isPresented: $confirmsEmptyTrash, titleVisibility: .visible) {
             Button("Delete Forever", role: .destructive) {
-                _ = try? library.emptyTrash()
-                selectedNoteID = nil
+                do {
+                    _ = try library.emptyTrash()
+                    try context.save()
+                    selectedNoteID = nil
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             }
+        }
+        .alert("Unable to Complete Action", item: $errorMessage) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(verbatim: message)
         }
         #if os(macOS)
         .onDeleteCommand {
-            if let note = results.first(where: { $0.id == selectedNoteID }) { trash(note) }
+            if let note = results.first(where: { $0.id == selectedNoteID }) {
+                if note.deletedAt != nil {
+                    deleteForeverTarget = note
+                } else {
+                    trash(note)
+                }
+            }
         }
         #endif
     }
@@ -148,7 +201,7 @@ struct NoteListView: View {
     // MARK: Empty states
 
     @ViewBuilder
-    private var emptyState: some View {
+    private func emptyState(_ results: [Note]) -> some View {
         if results.isEmpty {
             if isSearching {
                 ContentUnavailableView.search(text: searchText)
@@ -157,7 +210,7 @@ struct NoteListView: View {
                 case .trash:
                     ContentUnavailableView("Nothing Deleted", systemImage: "trash", description: Text("Deleted notes stay here for 30 days."))
                 case .all, .unfiled, .folder, .tag:
-                    ContentUnavailableView("No Notes", systemImage: "note.text", description: Text("Tap New Note to start."))
+                    ContentUnavailableView("No Notes", systemImage: "note.text", description: Text("Choose New Note to start."))
                 }
             }
         }
@@ -175,17 +228,31 @@ struct NoteListView: View {
         }
         let note = library.createNote(in: folder)
         if let tag { note.tags = [tag] }
-        selectedNoteID = note.id
+        do {
+            try context.save()
+            // A new empty note cannot match an active text search.
+            searchText = ""
+            selectedNoteID = note.id
+        } catch {
+            context.delete(note)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do {
+            try action()
+            try context.save()
+        } catch {
+            context.rollback()
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func trash(_ note: Note) {
-        library.trash(note)
-        if selectedNoteID == note.id { selectedNoteID = nil }
-    }
-
-    private func deleteForever(_ note: Note) {
-        if selectedNoteID == note.id { selectedNoteID = nil }
-        library.deleteForever(note)
+        perform {
+            library.trash(note)
+        }
     }
 }
 
@@ -200,29 +267,36 @@ private struct NoteRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                if note.isPinned {
-                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange)
+        VStack(alignment: .leading) {
+            Label {
+                if note.title.isEmpty {
+                    Text("New note")
+                } else {
+                    Text(verbatim: note.title)
                 }
-                Text(note.title.isEmpty ? "New note" : note.title).font(.headline).lineLimit(1)
+            } icon: {
+                if note.isPinned {
+                    Image(systemName: "pin.fill")
+                        .accessibilityLabel("Pinned")
+                }
             }
-            if !detail.isEmpty {
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            }
-            HStack(spacing: 6) {
-                Text(note.modifiedAt.formatted(date: .abbreviated, time: .shortened))
-                    .lineLimit(1)
-                    .layoutPriority(1)
+
+            Text(verbatim: detail)
+                .foregroundStyle(.secondary)
+                .lineLimit(1, reservesSpace: true)
+
+            HStack {
+                Text(note.modifiedAt, format: .dateTime.month().day())
+                    .lineLimit(1, reservesSpace: true)
                 if showsFolder, let folder = note.folder {
-                    Label(folder.name.isEmpty ? "Untitled" : folder.name, systemImage: "folder")
-                        .labelStyle(.titleAndIcon)
-                        .lineLimit(1)
+                    Text(verbatim: folder.name)
                 }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        // Let the list measure all three lines at their natural height on insertion.
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
     }
 }
@@ -240,4 +314,12 @@ private struct NoteRow: View {
         NoteListView(scope: .all, selectedNoteID: .constant(plan.id))
     }
     .modelContainer(container)
+}
+
+/// What decides whether the selected note is still in the list. The count changes whenever a note enters or leaves.
+private struct ResultsKey: Equatable {
+    let count: Int
+    let scope: NoteScope
+    let query: String
+    let everywhere: Bool
 }

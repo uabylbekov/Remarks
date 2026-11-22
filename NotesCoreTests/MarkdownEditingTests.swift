@@ -189,13 +189,25 @@ struct TableEditingTests {
         #expect(lines.count == 4)
         #expect(Set(lines.map(\.count)).count == 1)
         #expect(MarkdownEditing.isTableSeparator(lines[1]))
-        #expect((edit.replacement as NSString).substring(with: edit.selection) == "Column 1")
+        // The caret goes to the line below the table, which is shown as a grid.
+        #expect(edit.replacement.hasSuffix("\n"))
+        #expect(edit.selection == NSRange(location: (edit.replacement as NSString).length, length: 0))
     }
 
     @Test func putsTheTableAfterALineWithText() {
         let edit = MarkdownEditing.edit(.table, in: "Intro", selection: NSRange(location: 5, length: 0))
         #expect(edit.range == NSRange(location: 5, length: 0))
         #expect(edit.replacement.hasPrefix("\n| Column 1"))
+        #expect(edit.replacement.hasSuffix("\n"))
+    }
+
+    @Test func aTableInTheMiddleOfANoteKeepsItsFollowingLine() {
+        let text = "Intro\nOutro"
+        let edit = MarkdownEditing.edit(.table, in: text, selection: NSRange(location: 2, length: 0))
+        let result = (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+        #expect(result.hasSuffix("|\nOutro"))
+        // The caret is at the start of the line after the table.
+        #expect((result as NSString).substring(from: edit.selection.location) == "Outro")
     }
 
     @Test func recognisesRowsAndSeparators() {

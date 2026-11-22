@@ -6,8 +6,6 @@ import NotesCore
 @main struct MyApp: App {
     /// One container for the whole app. Built once, with CloudKit sync on (Spec 01 and Spec 02).
     private let store: Result<ModelContainer, Error>
-    /// Local-only note versions (Spec 02). Nil if it cannot open, and the app then works without version history.
-    private let history: HistoryRecorder?
     @State private var monitor = SyncMonitor()
 
     init() {
@@ -27,7 +25,6 @@ import NotesCore
         }
         #endif
         store = Result { try NotesStore.makeContainer() }
-        history = (try? HistoryStore.makeContainer()).map { HistoryRecorder(container: $0) }
 
         // Siri and Shortcuts can start the app with no window and run an intent straight away, so everything an
         // intent needs is registered here, not in a view (an unregistered dependency crashes).
@@ -44,9 +41,9 @@ import NotesCore
             case .success(let container):
                 ContentView()
                     .modifier(LibraryMaintenance())
+                    .modifier(SpotlightSync())
                     .modelContainer(container)
                     .environment(monitor)
-                    .environment(\.history, history)
             case .failure(let error):
                 ContentUnavailableView(
                     "Notes could not open its data",
@@ -63,7 +60,7 @@ import NotesCore
         #endif
         #if os(macOS)
         Settings {
-            AppearanceSettingsView()
+            SettingsView()
         }
         #endif
     }
@@ -71,18 +68,30 @@ import NotesCore
 
 /// Keeps the library tidy and starts watching sync (Spec 02, Y3 and Y4):
 /// - after every finished iCloud import, merges duplicate tags and notes that two devices created at once;
-/// - at launch and once a day, also permanently deletes notes that have been in Recently Deleted for 30 days.
+/// - after the first import (or 60 seconds after launch) and then once a day, also permanently deletes notes that have
+///   been in Recently Deleted for 30 days.
 private struct LibraryMaintenance: ViewModifier {
     @Environment(\.modelContext) private var context
     @Environment(SyncMonitor.self) private var monitor
 
     func body(content: Content) -> some View {
         content.task {
-            monitor.onImportFinished = { tidy(purging: false) }
+            // The first purge waits for an import, so a note restored on another device is not deleted from stale
+            // local state. Without iCloud no import comes, so it also runs 60 seconds after launch. Later imports
+            // only merge duplicates, because a purge reads every note and snapshot.
+            var didPurge = false
+            func purgeOnce() {
+                tidy(purging: !didPurge)
+                didPurge = true
+            }
+            monitor.onImportFinished = purgeOnce
             monitor.start()
+            tidy(purging: false)
+            try? await Task.sleep(for: .seconds(60))
+            purgeOnce()
             while !Task.isCancelled {
-                tidy(purging: true)
                 try? await Task.sleep(for: .seconds(24 * 60 * 60))
+                tidy(purging: true)
             }
         }
     }
@@ -91,6 +100,51 @@ private struct LibraryMaintenance: ViewModifier {
         let library = Library(context: context)
         let report = purging ? try? library.runMaintenance() : try? library.dedupe()
         if report?.changedAnything == true { try? context.save() }
+    }
+}
+
+/// Keeps Spotlight in step with the library while the app runs (Spec 06). The system can also ask for a reindex
+/// through `NoteEntityQuery`. Turning the setting off removes everything from the index.
+private struct SpotlightSync: ViewModifier {
+    @Environment(\.modelContext) private var context
+    @AppStorage(SpotlightSettings.key) private var isEnabled = true
+
+    func body(content: Content) -> some View {
+        content.task(id: isEnabled) {
+            // Start from an empty index, so notes trashed or deleted while the app was closed do not linger.
+            try? await SpotlightIndexer.removeAll()
+            guard isEnabled else { return }
+            let service = NotesService(modelContainer: context.container)
+            let indexed = IndexedNotes()
+            await sync(service, indexed)
+            var pending: Task<Void, Never>?
+            for await _ in NotificationCenter.default.notifications(named: ModelContext.didSave) {
+                // Saves come in bursts while typing, so every save restarts the wait.
+                pending?.cancel()
+                pending = Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
+                    await sync(service, indexed)
+                }
+            }
+            pending?.cancel()
+        }
+    }
+
+    /// What Spotlight has now. Whole values, not dates, so a new tag or folder name is noticed too.
+    @MainActor private final class IndexedNotes {
+        var byID: [UUID: NoteInfo] = [:]
+    }
+
+    /// Indexes what is new or changed, and removes what was trashed or deleted.
+    private func sync(_ service: NotesService, _ indexed: IndexedNotes) async {
+        guard let live = try? await service.liveNotes() else { return }
+        let changed = live.filter { indexed.byID[$0.id] != $0 }
+        let liveIDs = Set(live.map(\.id))
+        let gone = indexed.byID.keys.filter { !liveIDs.contains($0) }
+        guard (try? await SpotlightIndexer.index(changed)) != nil, (try? await SpotlightIndexer.remove(gone)) != nil else { return }
+        for note in changed { indexed.byID[note.id] = note }
+        for id in gone { indexed.byID[id] = nil }
     }
 }
 
@@ -128,6 +182,9 @@ private struct FormatCommands: Commands {
             Button("Format Table") { editor?.perform(.formatTable) }
             Button("Quote") { editor?.perform(.quote) }
             Button("Code Block") { editor?.perform(.codeBlock) }.keyboardShortcut("c", modifiers: [.command, .option])
+            Divider()
+            Toggle("Show Markdown", isOn: Binding(get: { editor?.showsMarkdown ?? false }, set: { editor?.showsMarkdown = $0 }))
+                .disabled(editor == nil)
         }
     }
 }

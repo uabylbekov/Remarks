@@ -2,9 +2,6 @@ import SwiftUI
 import ImageIO
 import NotesCore
 import UniformTypeIdentifiers
-#if canImport(UIKit)
-import QuickLook
-#endif
 
 // MARK: - Where an attachment comes from
 
@@ -12,6 +9,13 @@ enum AttachmentSource {
     case photoLibrary
     case camera
     case file
+}
+
+/// A file or picture taken from the clipboard, waiting to become an attachment.
+struct PastedFile {
+    let data: Data
+    let fileName: String
+    let type: UTType
 }
 
 // MARK: - What the editor needs to draw one
@@ -122,10 +126,28 @@ final class AttachmentFragment: NSTextLayoutFragment {
     private func contentRect(at origin: CGPoint) -> CGRect {
         CGRect(
             x: origin.x - layoutFragmentFrame.minX + padding,
-            y: origin.y + 2,
+            y: origin.y + (textLineFragments.first?.typographicBounds.minY ?? 0),
             width: max(0, containerWidth - 2 * padding),
             height: reservedHeight
         )
+    }
+
+    /// The drawn card, in text-container coordinates, also defines its interactive area.
+    var attachmentBounds: CGRect {
+        visibleRect(in: contentRect(at: layoutFragmentFrame.origin))
+    }
+
+    static func displaySize(in area: CGSize, display: AttachmentDisplay?) -> CGSize {
+        if let display, display.isImage, let image = display.image {
+            let scale = min(area.width / CGFloat(image.width), area.height / CGFloat(image.height))
+            return CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        }
+        return CGSize(width: min(area.width, 340), height: min(area.height, Self.chipHeight))
+    }
+
+    private func visibleRect(in area: CGRect) -> CGRect {
+        let display = attachmentID.flatMap { controller?.attachmentDisplay(for: $0) }
+        return CGRect(origin: area.origin, size: Self.displaySize(in: area.size, display: display))
     }
 
     override var renderingSurfaceBounds: CGRect {
@@ -153,23 +175,21 @@ final class AttachmentFragment: NSTextLayoutFragment {
     // MARK: Image
 
     private func drawImage(_ image: CGImage, in area: CGRect, context: CGContext) {
-        let scale = min(area.width / CGFloat(image.width), area.height / CGFloat(image.height))
-        let size = CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
-        let rect = CGRect(x: area.minX, y: area.minY, width: size.width, height: size.height)
+        let rect = visibleRect(in: area)
 
         context.addPath(CGPath(roundedRect: rect, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
         context.clip()
         // Text layout draws with y growing downward, and CGContext draws images upright for y growing upward.
         context.translateBy(x: rect.minX, y: rect.maxY)
         context.scaleBy(x: 1, y: -1)
-        context.draw(image, in: CGRect(origin: .zero, size: size))
+        context.draw(image, in: CGRect(origin: .zero, size: rect.size))
     }
 
     // MARK: Chip (files, and images that have not arrived yet)
 
     private func drawChip(_ display: AttachmentDisplay?, in area: CGRect, context: CGContext) {
-        let height = min(area.height, Self.chipHeight)
-        let chip = CGRect(x: area.minX, y: area.minY, width: min(area.width, 340), height: height)
+        let chip = visibleRect(in: area)
+        let height = chip.height
         context.setFillColor(EditorTheme.codeBackground.cgColor)
         context.addPath(CGPath(roundedRect: chip, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
         context.fillPath()
@@ -227,6 +247,18 @@ final class AttachmentFragment: NSTextLayoutFragment {
 /// Draws SF Symbols and text into the text layout's `CGContext`, on both platforms.
 @MainActor
 enum AttachmentDrawing {
+    /// A transparent native glyph reserves stable width for a custom-drawn preview element.
+    static func placeholder(size: CGSize) -> NSTextAttachment {
+        let attachment = NSTextAttachment(data: nil, ofType: nil)
+        attachment.bounds = CGRect(origin: .zero, size: size)
+        #if canImport(UIKit)
+        attachment.image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+        #else
+        attachment.image = NSImage(size: CGSize(width: 1, height: 1))
+        #endif
+        return attachment
+    }
+
     static func draw(symbol: String, in rect: CGRect, color: EditorColor, context: CGContext) {
         #if canImport(UIKit)
         guard let image = UIImage(systemName: symbol)?.withTintColor(color, renderingMode: .alwaysOriginal) else { return }
@@ -277,48 +309,21 @@ enum AttachmentDrawing {
 
 // MARK: - Opening
 
-/// Shows an attachment in a preview: Quick Look on iPhone and iPad, the default app on the Mac.
-@MainActor
-enum AttachmentOpener {
-    #if canImport(UIKit)
-    private static let dataSource = PreviewDataSource()
-    #endif
-
-    static func open(_ attachment: NotesCore.Attachment, from view: some Any) {
-        guard let data = attachment.data else { return }
+/// Writes an attachment to a temporary file, so the system's Quick Look can show it (`quickLookPreview`, in SwiftUI).
+enum AttachmentFiles {
+    static func temporaryURL(for attachment: NotesCore.Attachment) -> URL? {
+        guard let data = attachment.data else { return nil }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.id.uuidString, isDirectory: true)
-        let name = attachment.fileName.isEmpty ? "Attachment" : attachment.fileName
-        let url = directory.appendingPathComponent(name)
+        let url = directory.appendingPathComponent(attachment.fileName.isEmpty ? "Attachment" : attachment.fileName)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return url
         } catch {
-            return
+            return nil
         }
-        #if canImport(UIKit)
-        guard let view = view as? UIView, var top = view.window?.rootViewController else { return }
-        while let presented = top.presentedViewController { top = presented }
-        dataSource.url = url
-        let controller = QLPreviewController()
-        controller.dataSource = dataSource
-        top.present(controller, animated: true)
-        #else
-        NSWorkspace.shared.open(url)
-        #endif
     }
 }
-
-#if canImport(UIKit)
-private final class PreviewDataSource: NSObject, QLPreviewControllerDataSource {
-    var url: URL?
-
-    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { url == nil ? 0 : 1 }
-
-    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem {
-        (url ?? URL(fileURLWithPath: "/")) as NSURL
-    }
-}
-#endif
 
 private extension EditorColor {
     static var primaryText: EditorColor {

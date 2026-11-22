@@ -1,9 +1,10 @@
 import AppIntents
+import CoreSpotlight
 
 // What Siri, Shortcuts, and Spotlight see of a note or folder (Spec 06). These types are `nonisolated` because
 // App Intents calls them from its own contexts, while this target is main-actor by default.
 
-public struct NoteEntity: AppEntity {
+public struct NoteEntity: IndexedEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
         name: "Note",
         numericFormat: "\(placeholder: .int) notes"
@@ -13,13 +14,14 @@ public struct NoteEntity: AppEntity {
     /// `Note.id`: minted once, stored with the note, and the same on every device.
     public let id: UUID
 
-    @Property(title: "Title") var title: String
-    @Property(title: "Snippet") var snippet: String
+    // Only these three go to Spotlight: the title, the preview, and the tags. Never the full text (Spec 06, D1).
+    @Property(title: "Title", indexingKey: \.title) var title: String
+    @Property(title: "Snippet", indexingKey: \.contentDescription) var snippet: String
     @Property(title: "Modified") var modifiedAt: Date
     @Property(title: "Pinned") var isPinned: Bool
     /// Empty when the note is not in a folder.
     @Property(title: "Folder") var folderName: String
-    @Property(title: "Tags") var tags: [String]
+    @Property(title: "Tags", indexingKey: \.keywords) var tags: [String]
 
     public var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(
@@ -39,7 +41,7 @@ public struct NoteEntity: AppEntity {
     }
 }
 
-public struct NoteEntityQuery: EntityPropertyQuery, EntityStringQuery {
+public struct NoteEntityQuery: EntityPropertyQuery, EntityStringQuery, IndexedEntityQuery {
     public typealias ComparatorMappingType = NoteCondition
 
     @Dependency var service: NotesService
@@ -78,6 +80,18 @@ public struct NoteEntityQuery: EntityPropertyQuery, EntityStringQuery {
             SortableBy(\.$modifiedAt)
             SortableBy(\.$isPinned)
         }
+    }
+
+    // MARK: Spotlight reindexing (the system asks when its index has a problem)
+
+    public func reindexEntities(for identifiers: [UUID], indexDescription: CSSearchableIndexDescription) async throws {
+        guard SpotlightSettings.isEnabled else { return }
+        try await SpotlightIndexer.index(try await service.notes(withIDs: identifiers))
+    }
+
+    public func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        guard SpotlightSettings.isEnabled else { return }
+        try await SpotlightIndexer.index(try await service.liveNotes())
     }
 
     /// One batched fetch for every id. Notes that no longer exist are left out.

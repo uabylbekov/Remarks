@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var scope: NoteScope? = .all
     @State private var selectedNoteID: UUID?
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var errorMessage: String?
     @Environment(\.modelContext) private var context
     @State private var asksNewFolder = false
@@ -15,8 +16,12 @@ struct ContentView: View {
     private let router = NavigationRouter.shared
 
     var body: some View {
-        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
-            SidebarView(selection: $scope, asksNewFolder: $asksNewFolder) { id in
+        NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredColumn) {
+            SidebarView(
+                selection: $scope,
+                asksNewFolder: $asksNewFolder,
+                showsNewFolderButton: columnVisibility == .all
+            ) { id in
                 scope = .all
                 selectedNoteID = id
                 preferredColumn = .detail

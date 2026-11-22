@@ -3,7 +3,7 @@ import SwiftUI
 import NotesCore
 
 /// What the iOS and Mac editors do the same way: load and save the note, follow changes made outside the editor
-/// (iCloud, Siri, Shortcuts), keep version history, and drive the live preview. Each platform's coordinator owns its
+/// (iCloud, Siri, Shortcuts), and drive the live preview. Each platform's coordinator owns its
 /// text view and gives the session what it needs through `Host`.
 @MainActor
 final class EditorSession: NSObject {
@@ -26,7 +26,6 @@ final class EditorSession: NSObject {
 
     private(set) var note: Note
     let commands: EditorCommands?
-    private let history: HistoryRecorder?
     private var host: Host?
     private(set) var preview: LivePreviewController?
     private(set) lazy var catalog = AttachmentCatalog(note: { [unowned self] in self.note })
@@ -40,12 +39,10 @@ final class EditorSession: NSObject {
     private weak var observedUndoManager: UndoManager?
 
     var onSaveError: ((String) -> Void)?
-    var onKeptEdits: (() -> Void)?
     var onOpenAttachment: ((NotesCore.Attachment) -> Void)?
 
-    init(note: Note, history: HistoryRecorder?, commands: EditorCommands?) {
+    init(note: Note, commands: EditorCommands?) {
         self.note = note
-        self.history = history
         self.commands = commands
         super.init()
     }
@@ -89,13 +86,9 @@ final class EditorSession: NSObject {
         case .keepEditorText:
             break
         case .adoptIncoming:
-            // Keep the text that is about to be replaced (Spec 02, S2).
-            history?.record(noteID: note.id, body: editorText, reason: .beforeSyncUpdate, force: true)
             load()
         case .keepTypedTextAndSaveIncoming:
-            history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
             baseBody = note.body
-            onKeptEdits?()
         }
     }
 
@@ -122,8 +115,15 @@ final class EditorSession: NSObject {
     }
 
     /// Switches between hiding the Markdown marks and showing them.
-    func setShowsMarkdown(_ value: Bool) {
-        preview?.showsMarkdown = value
+    @discardableResult
+    func setShowsMarkdown(_ value: Bool) -> Bool {
+        guard let preview, let host, !host.isComposing(), preview.showsMarkdown != value else { return false }
+        preview.showsMarkdown = value
+        if !value {
+            let selection = preview.selectionForPreview(host.selection())
+            apply(TextEdit(range: NSRange(location: host.selection().location, length: 0), replacement: "", selection: selection))
+        }
+        return true
     }
 
     /// Pictures can arrive after their note (sync). Draw again when the set of attachments or their data changes.
@@ -178,12 +178,9 @@ final class EditorSession: NSObject {
     // MARK: Saving
 
     /// Writes the editor's text to the note, but only if the user changed it. Saving unchanged text could
-    /// undo an outside change the editor has not shown yet. Text the editor never saw is kept as a version first.
+    /// undo an outside change the editor has not shown yet.
     private func saveIfTyped(_ text: String) {
         guard text != baseBody else { return }
-        if EditorSync.unseenTextBeingOverwritten(editorText: text, baseBody: baseBody, storedBody: note.body) {
-            history?.record(noteID: note.id, body: note.body, reason: .otherVersion, force: true)
-        }
         note.setBody(text)
         baseBody = note.body
         hasPendingEdits = true
@@ -197,7 +194,6 @@ final class EditorSession: NSObject {
         do {
             try note.modelContext?.save()
             hasPendingEdits = false
-            history?.record(noteID: note.id, body: note.body, reason: .edit)
         } catch {
             // Keep pending edits so ending editing can retry the save.
             onSaveError?(error.localizedDescription)

@@ -21,6 +21,12 @@ struct InlineScannerTests {
         #expect(spans(#"**literal\**"#).isEmpty)
     }
 
+    @Test func escapedPunctuationCanRemainInsideFormattedText() {
+        let text = #"**hello\!**"#
+        #expect(spans(text).map(\.kind) == [.bold])
+        #expect(spans(text).first.map { substring(text, $0.content) } == #"hello\!"#)
+    }
+
     @Test func pairedBackslashesDoNotEscapeTheFollowingMarker() {
         #expect(spans(#"\\*italic*"#).map(\.kind) == [.italic])
     }

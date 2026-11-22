@@ -2,6 +2,9 @@ import Foundation
 import NotesCore
 
 extension Folder {
+    /// Navigation and reordering share the List's selection identifier type.
+    var sidebarScope: NoteScope { .folder(id) }
+
     /// Subfolders that are not in the trash, in manual order. Nil for a leaf, so the sidebar shows no disclosure arrow.
     var childNodes: [Folder]? {
         let kids = (children ?? []).filter { $0.deletedAt == nil }.sorted { $0.sortIndex < $1.sortIndex }

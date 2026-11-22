@@ -24,6 +24,15 @@ struct EditorBehaviorTests {
         #expect((nested as NSString).replacingCharacters(in: edit.range, with: edit.replacement) == "bold _italic_ end")
     }
 
+    @Test func insertingInlineCodeChoosesASafeDelimiter() throws {
+        let text = "a ` b"
+        let selected = NSRange(location: 0, length: text.utf16.count)
+        let edit = MarkdownEditing.edit(.inlineCode, in: text, selection: selected)
+        let result = try #require(edit.transaction(in: text, selectionBefore: selected)).result
+        #expect(result == "``a ` b``")
+        #expect(InlineScanner.spans(in: result).map(\.kind) == [.code])
+    }
+
     @Test func tildeFencesNeedMatchingClosers() {
         let text = "~~~swift\n```\nlet a = 1\n~~~\nafter"
         let blocks = CodeBlockScanner.scan(text)
@@ -66,4 +75,41 @@ struct EditorBehaviorTests {
         let outdent = try #require(MarkdownEditing.indentList(in: changed.result, selection: indent.selection, outdent: true))
         #expect((changed.result as NSString).replacingCharacters(in: outdent.range, with: outdent.replacement) == text)
     }
+    @Test func typedTablePipesRemainInTheirCell() throws {
+        var table = MarkdownTable.blank(columns: 2, rows: 1)
+        table.setCell("one | two", row: 0, column: 0)
+        table.setHeader("a \\| b", column: 1)
+        let restored = try #require(MarkdownTable(parsing: table.markdown()))
+        #expect(restored == table)
+        #expect(restored.rows[0][0] == "one \\| two")
+    }
+
+    @Test func evenBackslashesDoNotEscapeTableDividers() {
+        let row = "| a\\\\| b |"
+        #expect(MarkdownEditing.tablePipeOffsets(in: row as NSString) == [0, 5, 9])
+        #expect(MarkdownTable.cells(of: row) == ["a\\\\", "b"])
+    }
+
+    @Test func formattingATablePreservesEscapedPipes() throws {
+        let source = "| a \\| b | c |\n| --- | --- |\n| x | y |\n"
+        let edit = MarkdownEditing.edit(.formatTable, in: source, selection: NSRange(location: 3, length: 0))
+        let result = try #require(edit.transaction(in: source, selectionBefore: NSRange(location: 3, length: 0))).result
+        #expect(MarkdownTable(parsing: result) == MarkdownTable(parsing: source))
+    }
+
+    @Test func insertingATableDoesNotSplitCRLF() throws {
+        let source = "before\r\nafter"
+        let caret = NSRange(location: 2, length: 0)
+        let edit = MarkdownEditing.edit(.table, in: source, selection: caret)
+        let result = try #require(edit.transaction(in: source, selectionBefore: caret)).result
+        #expect(MarkdownDocument(result).blocks.contains { if case .table = $0.kind { true } else { false } })
+        #expect((result as NSString).substring(from: edit.selection.location) == "after")
+    }
+
+    @Test func aPartialSeparatorCannotActivateAMultiColumnTable() {
+        #expect(MarkdownTable(parsing: "| First | Second |\n| --- |") == nil)
+        #expect(MarkdownTable(parsing: "| First | Second |\n| --- | --- |")?.columnCount == 2)
+        #expect(MarkdownTable(parsing: "| First |\n| --- | --- |") == nil)
+    }
+
 }

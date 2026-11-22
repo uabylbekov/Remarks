@@ -41,6 +41,16 @@ enum InlineStyler {
         return !spans.isEmpty
     }
 
+    /// Continuation lines start where the first line's content starts, preserving body spacing.
+    static func applyHangingIndent(_ paragraph: NSMutableAttributedString, through prefixEnd: Int) {
+        guard prefixEnd > 0, prefixEnd <= paragraph.length else { return }
+        let prefix = paragraph.attributedSubstring(from: NSRange(location: 0, length: prefixEnd))
+        let existing = paragraph.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.headIndent = style.firstLineHeadIndent + prefix.size().width
+        paragraph.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: paragraph.length))
+    }
+
     /// Hides a mark: transparent and nearly zero-sized, so it takes no room. The characters stay, so selection, copy, and
     /// undo work on the real Markdown. The caret never rests inside a hidden mark (see `adjustedSelection`).
     static func collapse(_ text: NSMutableAttributedString, range: NSRange) {
