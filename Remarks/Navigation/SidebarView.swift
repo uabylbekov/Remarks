@@ -131,15 +131,14 @@ struct SidebarView: View {
                 }
             }
 
-            if deletedNoteCount > 0 {
-                Section {
-                    Label("Recently Deleted", systemImage: "trash")
-                        .badge(deletedNoteCount)
-                        .dropDestination(for: NoteReference.self) { references, _ in
-                            _ = trashNotes(references)
-                        }
-                        .tag(NoteScope.trash)
-                }
+            Section {
+                Label("Recently Deleted", systemImage: "trash")
+                    // A count of zero shows no badge.
+                    .badge(deletedNoteCount)
+                    .dropDestination(for: NoteReference.self) { references, _ in
+                        _ = trashNotes(references)
+                    }
+                    .tag(NoteScope.trash)
             }
         }
         .task {
@@ -147,9 +146,6 @@ struct SidebarView: View {
             for await _ in NotificationCenter.default.notifications(named: ModelContext.didSave) {
                 refreshCounts()
             }
-        }
-        .onChange(of: deletedNoteCount, initial: true) {
-            if deletedNoteCount == 0, selection == .trash { selection = .all }
         }
         .onChange(of: selection, initial: true) { revealSelection() }
         .onChange(of: folderHierarchy) { reconcileSelection() }

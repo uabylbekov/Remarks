@@ -6,7 +6,7 @@
       "localizations" : {
         "de" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Zu einer Notiz in ${applicationName} hinzufügen"
             ]
@@ -16,13 +16,14 @@
           "stringSet" : {
             "state" : "new",
             "values" : [
-              "Add to a note in ${applicationName}"
+              "Add to a note in ${applicationName}",
+              "Append to a note in ${applicationName}"
             ]
           }
         },
         "fr" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Ajouter à une note dans ${applicationName}"
             ]
@@ -30,7 +31,7 @@
         },
         "ja" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}のメモに追加"
             ]
@@ -38,7 +39,7 @@
         },
         "ko" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName} 노트에 추가"
             ]
@@ -46,7 +47,7 @@
         },
         "zh-Hans" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "添加到${applicationName}笔记"
             ]
@@ -54,7 +55,7 @@
         },
         "zh-Hant" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "加入${applicationName}筆記"
             ]
@@ -67,7 +68,7 @@
       "localizations" : {
         "de" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Notiz in ${applicationName} erstellen",
               "Neue Notiz in ${applicationName}"
@@ -79,13 +80,15 @@
             "state" : "new",
             "values" : [
               "Create a note in ${applicationName}",
-              "New note in ${applicationName}"
+              "New note in ${applicationName}",
+              "Make a note in ${applicationName}",
+              "Add a note to ${applicationName}"
             ]
           }
         },
         "fr" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Créer une note dans ${applicationName}",
               "Nouvelle note dans ${applicationName}"
@@ -94,7 +97,7 @@
         },
         "ja" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}でメモを作成",
               "${applicationName}で新規メモ"
@@ -103,7 +106,7 @@
         },
         "ko" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}에서 노트 생성",
               "${applicationName} 새 노트"
@@ -112,7 +115,7 @@
         },
         "zh-Hans" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中创建笔记",
               "在${applicationName}中新建笔记"
@@ -121,7 +124,7 @@
         },
         "zh-Hant" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中建立筆記",
               "在${applicationName}中新增筆記"
@@ -135,7 +138,7 @@
       "localizations" : {
         "de" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Notizen in ${applicationName} suchen"
             ]
@@ -145,13 +148,14 @@
           "stringSet" : {
             "state" : "new",
             "values" : [
-              "Find notes in ${applicationName}"
+              "Find notes in ${applicationName}",
+              "Search notes in ${applicationName}"
             ]
           }
         },
         "fr" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Rechercher des notes dans ${applicationName}"
             ]
@@ -159,7 +163,7 @@
         },
         "ja" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}でメモを検索"
             ]
@@ -167,7 +171,7 @@
         },
         "ko" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}에서 노트 찾기"
             ]
@@ -175,7 +179,7 @@
         },
         "zh-Hans" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中查找笔记"
             ]
@@ -183,7 +187,7 @@
         },
         "zh-Hant" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中尋找筆記"
             ]
@@ -196,7 +200,7 @@
       "localizations" : {
         "de" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Notiz in ${applicationName} öffnen"
             ]
@@ -206,13 +210,14 @@
           "stringSet" : {
             "state" : "new",
             "values" : [
-              "Open a note in ${applicationName}"
+              "Open a note in ${applicationName}",
+              "Show a note in ${applicationName}"
             ]
           }
         },
         "fr" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "Ouvrir une note dans ${applicationName}"
             ]
@@ -220,7 +225,7 @@
         },
         "ja" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}でメモを開く"
             ]
@@ -228,7 +233,7 @@
         },
         "ko" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "${applicationName}에서 노트 열기"
             ]
@@ -236,7 +241,7 @@
         },
         "zh-Hans" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中打开笔记"
             ]
@@ -244,9 +249,136 @@
         },
         "zh-Hant" : {
           "stringSet" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "values" : [
               "在${applicationName}中打開筆記"
+            ]
+          }
+        }
+      }
+    },
+    "Update a note in ${applicationName}" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "Notiz in ${applicationName} aktualisieren"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "new",
+            "values" : [
+              "Update a note in ${applicationName}",
+              "Pin a note in ${applicationName}",
+              "Rename a note in ${applicationName}",
+              "Move a note in ${applicationName}"
+            ]
+          }
+        },
+        "fr" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "Mettre à jour une note dans ${applicationName}"
+            ]
+          }
+        },
+        "ja" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "${applicationName}のメモを更新"
+            ]
+          }
+        },
+        "ko" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "${applicationName} 노트 업데이트"
+            ]
+          }
+        },
+        "zh-Hans" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "更新${applicationName}笔记"
+            ]
+          }
+        },
+        "zh-Hant" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "更新${applicationName}筆記"
+            ]
+          }
+        }
+      }
+    },
+    "Write a note in ${applicationName}" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "Notiz in ${applicationName} schreiben"
+            ]
+          }
+        },
+        "en" : {
+          "stringSet" : {
+            "state" : "new",
+            "values" : [
+              "Write a note in ${applicationName}",
+              "Write me a note in ${applicationName}",
+              "Generate a note in ${applicationName}"
+            ]
+          }
+        },
+        "fr" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "Écrire une note dans ${applicationName}"
+            ]
+          }
+        },
+        "ja" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "${applicationName}にメモを書く"
+            ]
+          }
+        },
+        "ko" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "${applicationName}에 노트 작성"
+            ]
+          }
+        },
+        "zh-Hans" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "在${applicationName}中撰写笔记"
+            ]
+          }
+        },
+        "zh-Hant" : {
+          "stringSet" : {
+            "state" : "machine_translated",
+            "values" : [
+              "在${applicationName}中撰寫筆記"
             ]
           }
         }
