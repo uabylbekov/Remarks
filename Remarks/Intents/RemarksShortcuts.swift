@@ -10,25 +10,57 @@ nonisolated struct RemarksShortcuts: AppShortcutsProvider {
             phrases: [
                 "Create a note in \(.applicationName)",
                 "New note in \(.applicationName)",
+                "Make a note in \(.applicationName)",
+                "Add a note to \(.applicationName)",
             ],
             shortTitle: "Create Note",
             systemImageName: "square.and.pencil"
         )
         AppShortcut(
+            intent: WriteNoteIntent(),
+            phrases: [
+                "Write a note in \(.applicationName)",
+                "Write me a note in \(.applicationName)",
+                "Generate a note in \(.applicationName)",
+            ],
+            shortTitle: "Write Note",
+            systemImageName: "sparkles"
+        )
+        AppShortcut(
             intent: AppendToNoteIntent(),
-            phrases: ["Add to a note in \(.applicationName)"],
+            phrases: [
+                "Add to a note in \(.applicationName)",
+                "Append to a note in \(.applicationName)",
+            ],
             shortTitle: "Add to Note",
             systemImageName: "text.append"
         )
         AppShortcut(
+            intent: UpdateNoteIntent(),
+            phrases: [
+                "Update a note in \(.applicationName)",
+                "Pin a note in \(.applicationName)",
+                "Rename a note in \(.applicationName)",
+                "Move a note in \(.applicationName)",
+            ],
+            shortTitle: "Update Note",
+            systemImageName: "pencil"
+        )
+        AppShortcut(
             intent: FindNotesIntent(),
-            phrases: ["Find notes in \(.applicationName)"],
+            phrases: [
+                "Find notes in \(.applicationName)",
+                "Search notes in \(.applicationName)",
+            ],
             shortTitle: "Find Notes",
             systemImageName: "magnifyingglass"
         )
         AppShortcut(
             intent: OpenNoteIntent(),
-            phrases: ["Open a note in \(.applicationName)"],
+            phrases: [
+                "Open a note in \(.applicationName)",
+                "Show a note in \(.applicationName)",
+            ],
             shortTitle: "Open Note",
             systemImageName: "note.text"
         )

@@ -50,6 +50,12 @@ import RemarksCore
         // intent needs is registered here, not in a view (an unregistered dependency crashes).
         if case .success(let container) = store {
             AppDependencyManager.shared.add(dependency: NotesService(modelContainer: container))
+        } else {
+            // The store did not open. Register an empty stand-in so intents fail with a message, not a crash.
+            NotesAvailability.isUnavailable = true
+            if let standIn = try? NotesStore.makeContainer(inMemory: true) {
+                AppDependencyManager.shared.add(dependency: NotesService(modelContainer: standIn))
+            }
         }
         let router = NavigationRouter.shared
         AppDependencyManager.shared.add(dependency: router)

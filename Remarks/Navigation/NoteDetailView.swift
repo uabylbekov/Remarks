@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppIntents
 import RemarksCore
 
 /// Resolves note identity before creating a fresh editor screen and session.
@@ -18,6 +19,8 @@ struct NoteDetailView: View {
         if let note = matches.first, !note.isDeleted, note.modelContext != nil {
             EditorContainer(note: note, onDelete: onDelete)
                 .id(noteID)
+                // Tells Siri and Apple Intelligence which note is on screen, so "add this to my note" has a target.
+                .appEntityIdentifier(EntityIdentifier(for: NoteEntity.self, identifier: noteID))
         } else {
             ContentUnavailableView("Note Not Found", systemImage: "questionmark.folder")
         }

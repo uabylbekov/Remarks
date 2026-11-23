@@ -18,7 +18,7 @@ public enum SpotlightIndexer {
 
     public static func index(_ notes: [NoteInfo]) async throws {
         guard !notes.isEmpty else { return }
-        try await CSSearchableIndex(name: indexName).indexAppEntities(notes.map(NoteEntity.init))
+        try await CSSearchableIndex(name: indexName).indexAppEntities(notes.map { NoteEntity($0) })
     }
 
     public static func remove(_ ids: [UUID]) async throws {

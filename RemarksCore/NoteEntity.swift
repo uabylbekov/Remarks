@@ -1,26 +1,68 @@
 import AppIntents
 import CoreSpotlight
+import CoreTransferable
 
-// What Siri, Shortcuts, and Spotlight see of a note or folder (Spec 06). These types are `nonisolated` because
-// App Intents calls them from its own contexts, while this target is main-actor by default.
+// What Siri, Shortcuts, and Spotlight see of a note or folder (Spec 06). These types follow Apple's `notes`
+// schemas, so Siri and Apple Intelligence know they are notes, folders, and an account, and can match
+// everyday requests like "add this to my wishlist note" to them.
 
+/// Remarks keeps every note in one place, so there is one account. The schema asks for it.
+@AppEntity(schema: .notes.account)
+public struct AccountEntity {
+    public static let defaultQuery = AccountEntityQuery()
+
+    /// Never changes, so saved shortcuts and Siri's memory of the account stay valid.
+    public static let accountID = UUID(uuidString: "5C1B0B3E-6E52-4B33-9B64-0A1B6A52D0A1")!
+    public static let shared = AccountEntity()
+
+    public let id = AccountEntity.accountID
+
+    var name: String
+
+    public var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "Remarks")
+    }
+
+    public init() {
+        name = "Remarks"
+    }
+}
+
+public struct AccountEntityQuery: EntityQuery {
+    public init() {}
+
+    public func entities(for identifiers: [UUID]) async throws -> [AccountEntity] {
+        identifiers.contains(AccountEntity.accountID) ? [AccountEntity.shared] : []
+    }
+
+    public func suggestedEntities() async throws -> [AccountEntity] {
+        [AccountEntity.shared]
+    }
+}
+
+@AppEntity(schema: .notes.note)
 public struct NoteEntity: IndexedEntity {
-    public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Note",
-        numericFormat: "\(placeholder: .int) notes"
-    )
     public static let defaultQuery = NoteEntityQuery()
 
     /// `Note.id`: minted once, stored with the note, and the same on every device.
     public let id: UUID
 
-    // Only these three go to Spotlight: the title, the preview, and the tags. Never the full text (Spec 06, D1).
+    // The schema's properties. `content` is the Markdown, and is only filled in when a note is looked up by id,
+    // so it never reaches Spotlight (Spec 06, D1: only the title, the preview, and the tags are indexed).
+    var name: AttributedString
+    var content: AttributedString?
+    var attachments: [IntentFile]
+    var isPinned: Bool
+    var creationDate: Date?
+    var modificationDate: Date?
+    var folder: FolderEntity?
+
+    // More for Shortcuts and Spotlight. `title` and `modifiedAt` are plain values that "Find Notes where…" can compare.
     @Property(title: "Title", indexingKey: \.title) var title: String
     @Property(title: "Snippet", indexingKey: \.contentDescription) var snippet: String
     @Property(title: "Modified") var modifiedAt: Date
-    @Property(title: "Pinned") var isPinned: Bool
     /// Empty when the note is not in a folder.
-    @Property(title: "Folder") var folderName: String
+    @Property(title: "Folder Name") var folderName: String
     @Property(title: "Tags", indexingKey: \.keywords) var tags: [String]
 
     public var displayRepresentation: DisplayRepresentation {
@@ -30,14 +72,33 @@ public struct NoteEntity: IndexedEntity {
         )
     }
 
-    public init(_ info: NoteInfo) {
+    public init(_ info: NoteInfo, content: String? = nil) {
         id = info.id
+        name = AttributedString(info.title)
+        self.content = content.map { AttributedString($0) }
+        attachments = []
+        isPinned = info.isPinned
+        creationDate = info.createdAt
+        modificationDate = info.modifiedAt
+        folder = info.folderID.map { FolderEntity(id: $0, name: info.folderName ?? "") }
         title = info.title
         snippet = info.snippet
         modifiedAt = info.modifiedAt
-        isPinned = info.isPinned
         folderName = info.folderName ?? ""
         tags = info.tags
+    }
+}
+
+/// Lets Siri and other apps take a note as text, for requests like "send this note to Mail".
+/// It is the note's text when the entity has it (a note Siri looked up by id), and the title and preview otherwise.
+extension NoteEntity: Transferable {
+    public static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation { entity in entity.plainText }
+    }
+
+    var plainText: String {
+        if let content, !content.characters.isEmpty { return String(content.characters) }
+        return snippet.isEmpty ? title : "\(title)\n\(snippet)"
     }
 }
 
@@ -94,19 +155,22 @@ public struct NoteEntityQuery: EntityPropertyQuery, EntityStringQuery, IndexedEn
         try await SpotlightIndexer.index(try await service.liveNotes())
     }
 
-    /// One batched fetch for every id. Notes that no longer exist are left out.
+    /// One batched fetch for every id, with the text, so Siri can read a note it was pointed at.
+    /// Notes that no longer exist are left out.
     public func entities(for identifiers: [UUID]) async throws -> [NoteEntity] {
-        try await service.notes(withIDs: identifiers).map(NoteEntity.init)
+        let infos = try await service.notes(withIDs: identifiers)
+        let texts = try await service.texts(withIDs: infos.map(\.id))
+        return infos.map { NoteEntity($0, content: texts[$0.id]) }
     }
 
     /// The picker's first choices: the 20 most recently changed notes.
     public func suggestedEntities() async throws -> [NoteEntity] {
-        try await service.recentNotes(limit: 20).map(NoteEntity.init)
+        try await service.recentNotes(limit: 20).map { NoteEntity($0) }
     }
 
     /// The framework does not filter for us. This is the same search the app uses.
     public func entities(matching string: String) async throws -> [NoteEntity] {
-        try await service.search(string, limit: 25).map(NoteEntity.init)
+        try await service.search(string, limit: 25).map { NoteEntity($0) }
     }
 
     public func entities(
@@ -124,30 +188,38 @@ public struct NoteEntityQuery: EntityPropertyQuery, EntityStringQuery, IndexedEn
         }
         return try await service
             .find(matching: comparators, matchAll: mode == .and, sortedBy: sorts, limit: limit)
-            .map(NoteEntity.init)
+            .map { NoteEntity($0) }
     }
 }
 
-public struct FolderEntity: AppEntity {
-    public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Folder",
-        numericFormat: "\(placeholder: .int) folders"
-    )
+@AppEntity(schema: .notes.folder)
+public struct FolderEntity {
     public static let defaultQuery = FolderEntityQuery()
 
     public let id: UUID
 
-    @Property(title: "Name") var name: String
-    @Property(title: "Notes") var noteCount: Int
+    var name: String
+    var parentFolder: FolderEntity?
+    var account: AccountEntity?
 
     public var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: LocalizedStringResource("\(name)"))
     }
 
+    /// A folder with just a name, for the folder a note sits in or a folder's parent.
+    init(id: UUID, name: String, parent: FolderEntity? = nil) {
+        self.id = id
+        self.name = name
+        parentFolder = parent
+        account = AccountEntity.shared
+    }
+
     public init(_ info: FolderInfo) {
-        id = info.id
-        name = info.name
-        noteCount = info.noteCount
+        self.init(
+            id: info.id,
+            name: info.name,
+            parent: info.parentID.map { FolderEntity(id: $0, name: info.parentName ?? "") }
+        )
     }
 }
 

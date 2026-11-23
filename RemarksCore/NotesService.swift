@@ -16,11 +16,13 @@ public struct NoteInfo: Sendable, Equatable, Identifiable {
     public let folderName: String?
     public let tags: [String]
     public let isTrashed: Bool
+    public let createdAt: Date
 
     init(_ note: Note) {
         id = note.id
         title = note.title
         snippet = note.snippet
+        createdAt = note.createdAt
         modifiedAt = note.modifiedAt
         isPinned = note.isPinned
         folderID = note.folder?.id
@@ -34,12 +36,28 @@ public struct FolderInfo: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let name: String
     public let noteCount: Int
+    public let parentID: UUID?
+    public let parentName: String?
+}
+
+/// A file that arrived from outside (Siri, Shortcuts), as plain data the service can store on a note.
+public struct IncomingFile: Sendable {
+    public let data: Data
+    public let fileName: String
+    public let typeIdentifier: String
+
+    public init(data: Data, fileName: String, typeIdentifier: String) {
+        self.data = data
+        self.fileName = fileName
+        self.typeIdentifier = typeIdentifier
+    }
 }
 
 public enum NotesServiceError: Error, Equatable {
     case noteNotFound
     case noteInTrash
     case folderNotFound
+    case attachmentFailed(AttachmentError)
 }
 
 public enum AppendPosition: String, Sendable, CaseIterable {
@@ -52,17 +70,100 @@ public actor NotesService {
 
     /// Creates a note. `title`, if given, becomes a first-level heading above the text.
     @discardableResult
-    public func createNote(text: String, title: String? = nil, folderID: UUID? = nil, now: Date = .now) throws -> NoteInfo {
+    public func createNote(
+        text: String,
+        title: String? = nil,
+        folderID: UUID? = nil,
+        isPinned: Bool = false,
+        attachments: [IncomingFile] = [],
+        now: Date = .now
+    ) throws -> NoteInfo {
         // Resolve everything first, then write once (an intent can be run again from the top).
         let folder = try folderID.map { try requireFolder($0) }
 
         var body = text
-        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+        if let title = title.map(Self.singleLine), !title.isEmpty {
             body = text.isEmpty ? "# \(title)\n" : "# \(title)\n\n\(text)"
         }
         let note = Library(context: modelContext).createNote(body: body, in: folder, now: now)
+        if isPinned { note.setPinned(true, now: now) }
+        do {
+            try attach(attachments, to: note, now: now)
+        } catch {
+            // Nothing is saved yet, so drop the half-made note.
+            modelContext.rollback()
+            throw error
+        }
         try modelContext.save()
         return NoteInfo(note)
+    }
+
+    /// Changes only what is given: the title (the note's first line), pinning, the folder, or more attachments.
+    /// A `nil` folder or title leaves it as it is.
+    @discardableResult
+    public func update(
+        _ id: UUID,
+        title: String? = nil,
+        isPinned: Bool? = nil,
+        folderID: UUID? = nil,
+        attachments: [IncomingFile] = [],
+        now: Date = .now
+    ) throws -> NoteInfo {
+        let note = try requireNote(id)
+        guard note.deletedAt == nil else { throw NotesServiceError.noteInTrash }
+        let folder = try folderID.map { try requireFolder($0) }
+
+        do {
+            if let title = title.map(Self.singleLine), !title.isEmpty {
+                note.setBody(Self.body(note.body, retitledTo: title), now: now)
+            }
+            if let isPinned { note.setPinned(isPinned, now: now) }
+            if let folder { note.move(to: folder, now: now) }
+            try attach(attachments, to: note, now: now)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+        try modelContext.save()
+        return NoteInfo(note)
+    }
+
+    /// A title is one line. Dictated or pasted text can hold line breaks, and those would turn the rest of the title into
+    /// body text. Each line is trimmed and the lines are joined with a space.
+    static func singleLine(_ title: String) -> String {
+        title.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Replaces the first line with `title`, keeping a heading marker if the line had one.
+    static func body(_ body: String, retitledTo title: String) -> String {
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "# \(title)\n" }
+        let firstBreak = body.firstIndex(of: "\n") ?? body.endIndex
+        let first = body[..<firstBreak]
+        let rest = body[firstBreak...]
+        let hashes = first.prefix { $0 == "#" }
+        let isHeading = (1...6).contains(hashes.count) && first.dropFirst(hashes.count).first == " "
+        return (isHeading ? "\(hashes) \(title)" : title) + rest
+    }
+
+    /// Stores each file on the note and puts its line at the end of the text.
+    private func attach(_ files: [IncomingFile], to note: Note, now: Date) throws {
+        guard !files.isEmpty else { return }
+        let store = AttachmentStore(context: modelContext)
+        var body = note.body
+        for file in files {
+            let attachment: Attachment
+            do {
+                attachment = try store.add(data: file.data, fileName: file.fileName, typeIdentifier: file.typeIdentifier, to: note, now: now)
+            } catch let error as AttachmentError {
+                throw NotesServiceError.attachmentFailed(error)
+            }
+            body += (body.isEmpty || body.hasSuffix("\n\n") ? "" : body.hasSuffix("\n") ? "\n" : "\n\n")
+            body += AttachmentStore.markdown(for: attachment) + "\n"
+        }
+        note.setBody(body, now: now)
     }
 
     /// Adds text to the start or end of a note. Notes in Recently Deleted are refused, not silently changed.
@@ -120,6 +221,13 @@ public actor NotesService {
         return ids.compactMap { byID[$0] }.filter { $0.deletedAt == nil }.map(NoteInfo.init)
     }
 
+    /// The Markdown of each note that still exists, by id. One fetch, for entities that carry their text.
+    public func texts(withIDs ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let found = try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) }))
+        return Dictionary(found.filter { $0.deletedAt == nil }.map { ($0.id, $0.body) }, uniquingKeysWith: { first, _ in first })
+    }
+
     /// Every note that is not in Recently Deleted. For Spotlight indexing, which only keeps titles and previews.
     public func liveNotes() throws -> [NoteInfo] {
         try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil })).map(NoteInfo.init)
@@ -175,7 +283,13 @@ public actor NotesService {
             sortBy: [SortDescriptor(\.sortIndex), SortDescriptor(\.name)]
         ))
         return all.map { folder in
-            FolderInfo(id: folder.id, name: folder.name, noteCount: (folder.notes ?? []).filter { $0.deletedAt == nil }.count)
+            FolderInfo(
+                id: folder.id,
+                name: folder.name,
+                noteCount: (folder.notes ?? []).filter { $0.deletedAt == nil }.count,
+                parentID: folder.parent?.id,
+                parentName: folder.parent?.name
+            )
         }
     }
 
