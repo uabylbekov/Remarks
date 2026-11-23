@@ -270,7 +270,7 @@ private struct NoteTextView: UIViewControllerRepresentable {
             session = EditorSession(note: note, commands: commands, rendersMarkdown: rendersMarkdown)
         }
 
-        func attach(to textView: MarkdownUITextView, parentViewController: UIViewController) {
+        func attach(to textView: MarkdownUITextView, parentViewController: NativeEditorViewController) {
             self.textView = textView
             textView.onCommand = { [weak self] in self?.perform($0) }
             textView.onOutdent = { [weak self, weak textView] in
@@ -337,7 +337,7 @@ private struct NoteTextView: UIViewControllerRepresentable {
                         textView?.isEditable = editable
                         self?.tableViews?.isEditable = editable
                     },
-                    focus: { [weak textView] in Task { @MainActor in _ = textView?.becomeFirstResponder() } }
+                    focus: { [weak parentViewController] in parentViewController?.focusTextView() }
                 ),
                 textLayoutManager: textView.textLayoutManager
             )

@@ -23,6 +23,7 @@ final class MarkdownAccessoryView: UIInputView {
 
         // The keyboard's safe area is not the bar's concern.
         host.safeAreaRegions = []
+        host.sizingOptions = .intrinsicContentSize
         host.view.backgroundColor = .clear
         host.view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host.view)
@@ -34,22 +35,28 @@ final class MarkdownAccessoryView: UIInputView {
         ])
     }
 
-    /// The keyboard asks for a height, and the bar is the only thing that knows it, so it is measured from the SwiftUI view.
+    /// The keyboard asks for a height, and the bar is the only thing that knows it. The hosting controller reports it,
+    /// so it is known before the keyboard rises and does not wait for a layout at the keyboard's width.
     override var intrinsicContentSize: CGSize {
-        let width = bounds.width > 0 ? bounds.width : 320
-        let height = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        return CGSize(width: UIView.noIntrinsicMetric, height: height)
+        CGSize(width: UIView.noIntrinsicMetric, height: barHeight)
+    }
+
+    /// The hosting view reports no size until SwiftUI has measured the bar, so the bar measures itself until then.
+    private var barHeight: CGFloat {
+        let reported = host.view.intrinsicContentSize.height
+        if reported > 0 { return reported }
+        return host.sizeThatFits(in: CGSize(width: UIView.layoutFittingExpandedSize.width, height: .greatestFiniteMagnitude)).height
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        if bounds.width != lastWidth {
-            lastWidth = bounds.width
+        if barHeight != lastHeight {
+            lastHeight = barHeight
             invalidateIntrinsicContentSize()
         }
     }
 
-    private var lastWidth: CGFloat = 0
+    private var lastHeight: CGFloat = 0
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {

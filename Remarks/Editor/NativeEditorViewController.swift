@@ -46,6 +46,25 @@ final class NativeEditorViewController: UIViewController {
         ])
     }
 
+    /// Raises the keyboard once the screen has finished appearing. The keyboard and its bar are glass, so raising them
+    /// while the screen is still sliding in has them draw over the transition, tinted grey, until it ends.
+    func focusTextView() {
+        if view.window != nil, transitionCoordinator == nil {
+            textView.becomeFirstResponder()
+        } else {
+            focusesOnAppearance = true
+        }
+    }
+
+    private var focusesOnAppearance = false
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard focusesOnAppearance else { return }
+        focusesOnAppearance = false
+        textView.becomeFirstResponder()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateKeyboardScrollSpace(overlap: max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY))

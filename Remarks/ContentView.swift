@@ -5,7 +5,9 @@ import RemarksCore
 /// Three columns: where notes live (sidebar), the notes there (list), and the editor (Spec 04).
 /// On iPhone and the iPhone Duo outer display it collapses to one column at a time.
 struct ContentView: View {
-    @State private var scope: NoteScope? = .all
+    /// Nothing is selected at first. On a one-column layout a selected place opens its notes at once, so the app would not
+    /// start on the folder list. `restorePlace()` selects one where the columns show side by side.
+    @State private var scope: NoteScope?
     @State private var selectedNoteID: UUID?
     /// Where this window was looking and which note it had open, kept per window so a relaunch comes back to them. These
     /// only remember: `scope` and `selectedNoteID` are the live values. A list selection reads its binding straight after
@@ -18,6 +20,7 @@ struct ContentView: View {
     @State private var errorMessage: String?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @Environment(\.modelContext) private var context
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var asksNewFolder = false
     @State private var newFolderName = ""
     #if os(macOS)
@@ -27,10 +30,16 @@ struct ContentView: View {
     private let router = NavigationRouter.shared
 
     /// Puts the window back where it was, once, unless a request to open a note got there first.
+    /// When the layout is one column at a time, it starts on the folder list instead: restoring a folder or note would
+    /// open straight into it.
     private func restorePlace() {
         guard !didRestorePlace else { return }
         didRestorePlace = true
-        if let restored = NoteScope(storageKey: storedScope) { scope = restored }
+        guard horizontalSizeClass != .compact else {
+            preferredColumn = .sidebar
+            return
+        }
+        scope = NoteScope(storageKey: storedScope) ?? .all
         selectedNoteID = UUID(uuidString: storedNoteID)
     }
 
@@ -120,6 +129,11 @@ struct ContentView: View {
             router.didOpen()
         }
         .task { restorePlace() }
+        // A window that starts one column wide has no place selected. When it widens (Split View, Stage Manager, rotation)
+        // the sidebar would have nothing selected next to the list, so it gets the default place.
+        .onChange(of: horizontalSizeClass) {
+            if horizontalSizeClass != .compact, scope == nil { scope = .all }
+        }
         .onChange(of: scope) { storedScope = scope?.storageKey ?? "" }
         .onChange(of: selectedNoteID) { storedNoteID = selectedNoteID?.uuidString ?? "" }
     }

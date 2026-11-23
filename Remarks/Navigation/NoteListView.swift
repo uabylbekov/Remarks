@@ -530,7 +530,10 @@ private struct NoteListRow: View {
         // dismissing the row before confirmation.
         .swipeActions(edge: .trailing, allowsFullSwipe: isLive && !isTrashed) {
             if isTrashed {
-                Button("Delete", systemImage: "trash", role: .destructive, action: onDeleteForever)
+                // Not `.destructive`: that makes the list remove the row at once, but the note only goes after the
+                // confirmation, so the row count would be wrong when the deletion lands.
+                Button("Delete", systemImage: "trash", action: onDeleteForever)
+                    .tint(.red)
                     .labelStyle(.iconOnly)
             } else if isLive {
                 Button("Delete", systemImage: "trash", role: .destructive) { onTrash(note) }
