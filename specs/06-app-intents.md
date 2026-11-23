@@ -14,7 +14,7 @@ Source of the API rules below: Apple's App Intents guidance for the iOS 26 and 2
 | 4. Create, Add to, Find, Get Note Text | Done |
 | 5. Open Note, Trash Note | Done. Open goes through `NavigationRouter`; Trash confirms first and registers Undo |
 | 6. App Shortcuts and phrases | Done: four shortcuts (Create, Add to, Find, Open). The build extracted all of them |
-| 7. Spotlight indexing and the Settings switch (D1) | **Not built yet** |
+| 7. Spotlight indexing and the Settings switch (D1) | Done: `NoteEntity` is an `IndexedEntity` (title, preview, and tags only), `NoteEntityQuery` answers system reindex requests, the app indexes changes a few seconds after each save and removes trashed notes, and Settings has "Show Notes in Spotlight" (on by default; off removes everything). 3 tests. **Not verified in Spotlight on a device** |
 
 **Where the code lives.** The intents and entities are in `NotesCore`, not the app target. The app target is main-actor by default, which conflicts with App Intents and produced about 30 warnings; the framework is not, and this is how Apple's own sample is organized. `NotesCorePackage` and the app's `NotesAppPackage` (an `AppIntentsPackage` pair) tell the system where to find them. Only the `AppShortcutsProvider` stays in the app. A future widget or Siri extension can reuse the same framework.
 
@@ -28,7 +28,7 @@ Siri, Shortcuts, Spotlight, and Apple Intelligence can **create, append to, find
 
 ## Principles
 
-1. **Intents are thin.** Each intent validates input, calls `NotesService` (in `NotesCore`), and returns a result. The rules (trash, folder, tag, dedupe, snapshots) stay in `Library`, as they are now.
+1. **Intents are thin.** Each intent validates input, calls `NotesService` (in `NotesCore`), and returns a result. The rules (trash, folder, tag, dedupe) stay in `Library`, as they are now.
 2. **Intents run cold.** Siri can launch the app's process and call `perform()` without any view appearing. Everything an intent needs is created in `App.init()`.
 3. **Spotlight is on by default, and the user can turn it off.** Only titles and snippets are indexed, never the full text (see Decisions).
 4. **No irreversible work in an intent without a way back.** Trashing is recoverable (Recently Deleted). Permanent deletion and Empty Trash are **not** exposed.
@@ -110,10 +110,9 @@ Required fix (part of this milestone, tested):
 1. The editor remembers the last body it saved or loaded (`baseBody`).
 2. When the note's stored body changes while the editor is focused:
    - if the editor's text equals `baseBody` (nothing typed yet), load the new body;
-   - otherwise keep the typed text, **save the incoming body as a version** ("Before an update from iCloud" or "Before an intent change"), and tell the user with a non-blocking message ("Another change was saved to Version History").
-3. `flushSave()` records the body it is about to replace as a snapshot when it differs from `baseBody`.
+   - otherwise keep the typed text and save it over the incoming body. **The incoming body is not kept**: Version History was removed on 2026-11-21 (Spec 02), and with it the notice that said another change was saved.
 
-This also closes the S2 gap noted in Spec 02 for open notes.
+An Add to Note intent that lands while you are typing in the same note can therefore be overwritten. Revisit this if it happens in practice.
 
 ## Spotlight and Apple Intelligence (on by default, with a switch, decision D1)
 
@@ -150,7 +149,7 @@ Tags as entities, creating folders by voice, Visual Intelligence, interactive sn
 ## Acceptance criteria
 
 1. From a cold start, "Create a note in Notes" through Siri or Shortcuts creates a note that appears in the app and syncs.
-2. Add to Note on a note that is open and being typed in loses nothing. The incoming text is kept in Version History.
+2. Add to Note on a note that is open and being typed in never replaces what was typed. (The added text is not kept in that case, see "The editor conflict".)
 3. Find Notes with 5,000 notes returns in well under a second and loads only the matches.
 4. No intent can permanently delete data.
 5. With the Spotlight setting off, Spotlight shows nothing from the app. With it on (the default), titles and snippets appear in Spotlight.

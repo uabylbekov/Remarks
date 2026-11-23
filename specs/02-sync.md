@@ -1,6 +1,6 @@
 # Spec 02: Sync
 
-Status: **Approved to build (2026-11-19)**, with open risks noted below. Milestone: M0 (plumbing), M1 (status UI), post-M1 (snapshots).
+Status: **Approved to build (2026-11-19)**, with open risks noted below. Milestone: M0 (plumbing), M1 (status UI).
 Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 
 ## Goals
@@ -38,14 +38,9 @@ Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 
 | ID | Requirement |
 |---|---|
-| S1 | Keep **local-only note snapshots**: the last N versions of each note's body (N around 20, plus one per day for 14 days), stored in a separate non-synced store. They are never uploaded |
-| S2 | Take a snapshot before any import overwrites a note whose local body differs from the incoming body |
-| S3 | A "Version history" screen lets the user restore or copy from a snapshot |
-| S4 | Snapshots are excluded from the CloudKit schema entirely, so they do not make the permanent schema bigger |
+| S1 to S4 | **Dropped (2026-11-21).** The app no longer keeps local note snapshots or a Version History screen. Apple Notes has none, and Recently Deleted covers deleted notes |
 
-**Status (2026-11-19):** S1, S3, and S4 are built. S2 is built for notes that are open in the editor: just before the editor replaces its text with a newer version from iCloud, the old text is saved as a "Before an update from iCloud" version. A note that is **not** open when an import overwrites it is not covered yet. Closing that gap needs history tracking in the store.
-
-**How it works:** the editor saves a version after each write to a note, at most every 5 minutes per note (policy in `SnapshotPolicy`), keeping the newest 20 and one per day for 14 days. Versions live in a separate local store (`HistoryStore`) that is never synced. Version History is in the note's menu.
+**Decision (2026-11-21):** Version History was removed (the `HistoryStore`, `HistoryRecorder`, `VersionHistoryView`, and the menu item). The safety net against silent loss is now: a note open in the editor never has typed text replaced by an incoming change, and an untouched editor follows the incoming change (`EditorSync`). If you typed while another device changed the same note, **your text wins and the other device's version is not kept**. Revisit this if sync conflicts turn out to lose text in practice.
 
 ## Built so far
 
@@ -92,12 +87,12 @@ Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 3. Airplane mode: edits persist and sync after reconnecting.
 4. After sync, no duplicate tags (same normalized name) remain.
 5. A 2 MB note round-trips between two devices with equal length.
-6. An import that changes a note's body creates a local snapshot first (post-M1, S2).
+6. An import that changes the body of a note that is open and being typed in never replaces the typed text.
 7. Account sign-out and account change show a clear explanation before data changes.
 
 ## Open risks
 
-1. **Unexplained merge:** the spike's clean merge may not hold in other timings. Mitigation: S1 to S4, and a later regression test with scripted two-device runs.
+1. **Unexplained merge:** the spike's clean merge may not hold in other timings. Mitigation: the editor keeps typed text over incoming text, and a later regression test with scripted two-device runs. With Version History removed, a lost incoming edit is not recoverable.
 2. **Account change behavior** (Y5) is unverified.
 3. **Dedupe timing:** running after import events is assumed to be early enough. Verify no UI flicker of duplicates.
 4. **Development schema** may not contain fields that were never set until `initializeCloudKitSchema` runs.
