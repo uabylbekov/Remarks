@@ -13,7 +13,26 @@ typealias EditorColor = NSColor
 
 /// Fonts and colors used by the editor. Fonts, size, and the code theme come from the user's appearance
 /// settings (Spec 11). Colors adapt to light, dark, and Increase Contrast.
+@MainActor
 enum EditorTheme {
+    /// Pre-resolved fonts, paragraph style, and dynamic colors for one appearance revision and base size.
+    private struct Cache {
+        let revision: Int
+        let baseProseSize: CGFloat
+        let proseFont: EditorFont
+        let codeFont: EditorFont
+        let fenceFont: EditorFont
+        let bodyParagraphStyle: NSParagraphStyle
+        let codeLineSpacing: CGFloat
+        let headingFonts: [EditorFont]
+        let codeBackground: EditorColor
+        let codeTextColor: EditorColor
+        let scopeColors: [SyntaxScope: EditorColor]
+        let scopeFonts: [SyntaxScope: EditorFont]
+    }
+
+    private static var cached: Cache?
+
     private static var settings: AppearanceSettings { AppearanceModel.shared.settings }
 
     // MARK: Fonts
@@ -27,23 +46,78 @@ enum EditorTheme {
         #endif
     }
 
-    private static var proseSize: CGFloat { baseProseSize * settings.sizeScale }
-
-    static var proseFont: EditorFont {
-        font(for: settings.textFont, size: proseSize)
+    private static var current: Cache {
+        let revision = AppearanceModel.shared.revision
+        let baseSize = baseProseSize
+        if let cached, cached.revision == revision, cached.baseProseSize == baseSize {
+            return cached
+        }
+        let settings = AppearanceModel.shared.settings
+        let proseSize = baseSize * settings.sizeScale
+        let prose = font(for: settings.textFont, size: proseSize)
+        let code = codeFont(size: proseSize * 0.92, settings: settings)
+        let fence = codeFont(size: code.pointSize * 0.8, settings: settings)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = proseSize * settings.lineSpacing
+        let scales: [CGFloat] = [1.7, 1.45, 1.25, 1.1, 1.0, 1.0]
+        let headings = scales.map { traited(font(for: settings.textFont, size: proseSize * $0), bold: true) }
+        let codeBg = color(settings.codeTheme.background)
+        let codeText = color(settings.codeTheme.text)
+        var scopes: [SyntaxScope: EditorColor] = [:]
+        var scopeFonts: [SyntaxScope: EditorFont] = [:]
+        for scope in SyntaxScope.allCases {
+            if let tokenStyle = settings.codeTheme.style(for: scope) {
+                scopes[scope] = color(tokenStyle.color)
+                if tokenStyle.bold || tokenStyle.italic {
+                    scopeFonts[scope] = traited(code, bold: tokenStyle.bold, italic: tokenStyle.italic)
+                }
+            } else {
+                scopes[scope] = codeText
+            }
+        }
+        let next = Cache(
+            revision: revision,
+            baseProseSize: baseSize,
+            proseFont: prose,
+            codeFont: code,
+            fenceFont: fence,
+            bodyParagraphStyle: style.copy() as? NSParagraphStyle ?? style,
+            codeLineSpacing: code.pointSize * settings.lineSpacing,
+            headingFonts: headings,
+            codeBackground: codeBg,
+            codeTextColor: codeText,
+            scopeColors: scopes,
+            scopeFonts: scopeFonts
+        )
+        cached = next
+        return next
     }
 
-    static var codeFont: EditorFont {
-        codeFont(size: proseSize * 0.92)
+    private static var proseSize: CGFloat { baseProseSize * settings.sizeScale }
+
+    static var proseFont: EditorFont { current.proseFont }
+
+    static var codeFont: EditorFont { current.codeFont }
+
+    /// The smaller code font used for fenced block delimiters (` ```swift `).
+    static var fenceFont: EditorFont { current.fenceFont }
+
+    /// Complete base attributes for ordinary prose so newly inserted text never falls back to default 12pt black.
+    static var bodyAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: proseFont,
+            .foregroundColor: baseColor,
+            .paragraphStyle: bodyParagraphStyle,
+        ]
     }
 
     /// The code font scaled down, for tables that are wider than the text.
     static func codeFont(scale: CGFloat) -> EditorFont {
-        codeFont(size: proseSize * 0.92 * scale)
+        codeFont(size: proseSize * 0.92 * scale, settings: settings)
     }
 
     /// The code font at a size, with ligatures switched off when the setting says so.
-    private static func codeFont(size: CGFloat) -> EditorFont {
+    private static func codeFont(size: CGFloat, settings: AppearanceSettings) -> EditorFont {
         let base = font(for: settings.codeFont, size: size)
         return settings.codeLigatures ? base : withoutLigatures(base)
     }
@@ -70,24 +144,19 @@ enum EditorTheme {
 
     /// The paragraph style for ordinary text: the line spacing setting, as a fraction of the font size. Lines that the
     /// live preview styles itself (code, tables, attachments) set their own.
-    static var bodyParagraphStyle: NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = proseSize * settings.lineSpacing
-        return style
-    }
+    static var bodyParagraphStyle: NSParagraphStyle { current.bodyParagraphStyle }
 
     /// The line spacing setting for code, as a fraction of the code font size, like `bodyParagraphStyle` does for text.
-    static var codeLineSpacing: CGFloat { codeFont.pointSize * settings.lineSpacing }
+    static var codeLineSpacing: CGFloat { current.codeLineSpacing }
 
     /// Heading level 1 to 6. Levels 5 and 6 stay at body size.
     static func headingFont(level: Int) -> EditorFont {
-        let scale = [1.7, 1.45, 1.25, 1.1, 1.0, 1.0][min(max(level, 1), 6) - 1]
-        return traited(font(for: settings.textFont, size: proseSize * scale), bold: true)
+        current.headingFonts[min(max(level, 1), 6) - 1]
     }
 
     /// Inline code: the code font, slightly smaller than the surrounding text.
     static func inlineCodeFont(matching font: EditorFont) -> EditorFont {
-        codeFont(size: font.pointSize * 0.92)
+        codeFont(size: font.pointSize * 0.92, settings: settings)
     }
 
     /// Builds a font from a saved choice. A font that is missing on this device falls back to the system font (F4).
@@ -180,13 +249,18 @@ enum EditorTheme {
     }
 
     /// The code theme's background, for code blocks and inline code.
-    static var codeBackground: EditorColor { color(settings.codeTheme.background) }
+    static var codeBackground: EditorColor { current.codeBackground }
 
     /// The code theme's plain text color, for code that has no token color.
-    static var codeTextColor: EditorColor { color(settings.codeTheme.text) }
+    static var codeTextColor: EditorColor { current.codeTextColor }
 
     static func color(for scope: SyntaxScope) -> EditorColor {
-        settings.codeTheme.style(for: scope).map { color($0.color) } ?? codeTextColor
+        current.scopeColors[scope] ?? current.codeTextColor
+    }
+
+    /// Bold/italic code font variant for syntax scopes whose theme style sets font traits, or nil for regular code font.
+    static func font(for scope: SyntaxScope) -> EditorFont? {
+        current.scopeFonts[scope]
     }
 
     /// A color that switches between the theme's light and dark variants with the appearance.

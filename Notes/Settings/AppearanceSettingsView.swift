@@ -1,58 +1,105 @@
 import SwiftUI
 import NotesCore
 
-#if canImport(UIKit)
-import UIKit
-#endif
-
-/// How notes look: background, text, and code (Spec 11). A standard `Form`, so it follows the system look on every platform.
+/// How notes look: fonts, text spacing, and code theme (Spec 11). A standard grouped `Form`, so it follows the system
+/// look on every platform.
 struct AppearanceSettingsView: View {
-    @Bindable private var model = AppearanceModel.shared
-
     var body: some View {
         Form {
-            Section("Preview") {
-                AppearancePreview(settings: model.settings)
-            }
-
-            Section {
-                FontChoiceRow(
-                    title: "Font",
-                    choice: $model.settings.textFont,
-                    presets: [.system, .design(.serif), .design(.rounded), .design(.monospaced)]
-                )
-                SliderRow(title: "Size", value: $model.settings.sizeScale, range: AppearanceSettings.sizeScaleRange,
-                          lowSymbol: "textformat.size.smaller", highSymbol: "textformat.size.larger")
-                SliderRow(title: "Line Spacing", value: $model.settings.lineSpacing, range: AppearanceSettings.lineSpacingRange,
-                          lowSymbol: "text.alignleft", highSymbol: "text.justify.leading")
-            } header: {
-                Text("Text")
-            } footer: {
-                Text("Size works together with your system text size.")
-            }
-
-            Section {
-                FontChoiceRow(
-                    title: "Font",
-                    choice: $model.settings.codeFont,
-                    presets: CodeFonts.all.map(\.choice),
-                    displayName: { CodeFonts.option(for: $0)?.name }
-                )
-                Toggle("Ligatures", isOn: $model.settings.codeLigatures)
-                ThemeSwatches(selection: $model.settings.codeThemeID)
-            } header: {
-                Text("Code")
-            } footer: {
-                Text("Fira Code, JetBrains Mono, and IBM Plex Mono come with the app under the SIL Open Font License. Ligatures join characters such as -> and != into one symbol, in the fonts that support them. Themes follow light and dark appearance.")
-            }
-
-            Section {
-                Button("Reset to Defaults", role: .destructive) { model.reset() }
-                    .disabled(model.settings == AppearanceSettings())
-            }
+            AppearanceSettingsSections()
+            AppearanceResetSection(title: "Reset to Defaults")
         }
         .formStyle(.grouped)
+        #if !os(macOS)
         .navigationTitle("Appearance")
+        #endif
+    }
+}
+
+/// The appearance sections shared between the iOS Appearance screen and the macOS Settings window.
+struct AppearanceSettingsSections: View {
+    @Environment(\.appearanceModel) private var model
+
+    var body: some View {
+        @Bindable var model = model
+
+        Section("Preview") {
+            AppearancePreview(revision: model.revision)
+        }
+
+        Section {
+            FontChoiceRow(
+                title: "Font",
+                choice: $model.settings.textFont,
+                presets: [.system, .design(.serif), .design(.rounded), .design(.monospaced)]
+            )
+            SliderRow(
+                title: "Size",
+                value: $model.settings.sizeScale,
+                range: AppearanceSettings.sizeScaleRange,
+                neutralValue: AppearanceSettings.defaultSizeScale,
+                formattedValue: model.settings.sizeScale.formatted(.percent.precision(.fractionLength(0)))
+            ) {
+                Image(systemName: "textformat.size.smaller")
+                    .foregroundStyle(.secondary)
+            } maximumValueLabel: {
+                Image(systemName: "textformat.size.larger")
+                    .foregroundStyle(.secondary)
+            }
+            SliderRow(
+                title: "Line Height",
+                value: $model.settings.lineHeight,
+                range: AppearanceSettings.lineHeightRange,
+                neutralValue: AppearanceSettings.defaultLineHeight,
+                formattedValue: model.settings.lineHeight.formatted(.number.precision(.fractionLength(2)))
+            ) {
+                Text(AppearanceSettings.lineHeightRange.lowerBound, format: .number.precision(.fractionLength(1)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            } maximumValueLabel: {
+                Text(AppearanceSettings.lineHeightRange.upperBound, format: .number.precision(.fractionLength(1)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        } header: {
+            Text("Text")
+        } footer: {
+            #if os(iOS)
+            Text("Size works together with your system text size.")
+            #endif
+        }
+
+        Section {
+            FontChoiceRow(
+                title: "Font",
+                choice: $model.settings.codeFont,
+                presets: CodeFonts.all.map(\.choice),
+                displayName: { CodeFonts.option(for: $0)?.name }
+            )
+            Toggle("Ligatures", isOn: $model.settings.codeLigatures)
+            ThemeSwatches(selection: $model.settings.codeThemeID)
+        } header: {
+            Text("Code")
+        } footer: {
+            Text("Fira Code, JetBrains Mono, and IBM Plex Mono come with the app under the SIL Open Font License. Ligatures join characters such as -> and != into one symbol, in the fonts that support them. Themes follow light and dark appearance.")
+        }
+    }
+}
+
+/// Resets appearance settings back to their defaults.
+struct AppearanceResetSection: View {
+    @Environment(\.appearanceModel) private var model
+    let title: LocalizedStringKey
+
+    var body: some View {
+        Section {
+            Button(title, role: .destructive) {
+                model.reset()
+            }
+            .disabled(model.settings == AppearanceSettings())
+        }
     }
 }
 
@@ -102,8 +149,9 @@ private struct FontChoiceRow: View {
 
 /// A real sample in the chosen fonts and theme (Spec 11, F7), built with the same colors the editor uses.
 private struct AppearancePreview: View {
-    /// Not read directly: the editor's theme reads the same settings, and passing them in makes the preview redraw on a change.
-    let settings: AppearanceSettings
+    /// Not read directly: `EditorTheme` caches its fonts and colors by this number, which changes with every setting and
+    /// with the system text size. Passing it in redraws the preview exactly when the theme has new values.
+    let revision: Int
 
     private static let sample = """
     func note(id: Int) -> String {
@@ -114,19 +162,49 @@ private struct AppearancePreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Groceries")
-                .font(Font(EditorTheme.headingFont(level: 1) as CTFont))
+            Text(headingSample)
             Text("Pick up fresh bread, olive oil, and anything else that looks good at the market.")
                 .font(Font(EditorTheme.proseFont as CTFont))
                 .lineSpacing(EditorTheme.bodyParagraphStyle.lineSpacing)
-            Text(codeSample)
-                .lineSpacing(EditorTheme.codeLineSpacing)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color(EditorTheme.codeBackground), in: .rect(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(openingFence)
+                    .padding(.bottom, LivePreviewController.fenceGap)
+                Text(codeSample)
+                    .lineSpacing(EditorTheme.codeLineSpacing)
+                Text(verbatim: "```")
+                    .font(fenceFont)
+                    .foregroundStyle(Color(EditorTheme.dimColor))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, LivePreviewController.cardPadding)
+            .padding(.horizontal, LivePreviewController.codeInset)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+    }
+
+    private var fenceFont: Font {
+        Font(EditorFont.monospacedSystemFont(ofSize: EditorTheme.codeFont.pointSize * 0.8, weight: .regular) as CTFont)
+    }
+
+    private var headingSample: AttributedString {
+        var marker = AttributedString("# ")
+        marker.foregroundColor = Color(EditorTheme.dimColor)
+        var title = AttributedString("Groceries")
+        title.foregroundColor = Color(EditorTheme.baseColor)
+        var combined = marker + title
+        combined.font = Font(EditorTheme.headingFont(level: 1) as CTFont)
+        return combined
+    }
+
+    private var openingFence: AttributedString {
+        var ticks = AttributedString("```")
+        ticks.foregroundColor = Color(EditorTheme.dimColor)
+        var language = AttributedString("swift")
+        language.foregroundColor = Color(EditorTheme.codeTextColor)
+        var combined = ticks + language
+        combined.font = fenceFont
+        return combined
     }
 
     private var codeSample: AttributedString {
@@ -147,26 +225,65 @@ private struct AppearancePreview: View {
 
 // MARK: - Slider row
 
-/// A name with its current value, and a slider under it. The slider's own label is hidden because the row already shows it.
-private struct SliderRow: View {
+/// A stepped slider with a default tick mark and a formatted value readout.
+/// On macOS it uses the native grouped-form `Slider` row layout; on iOS it places a `LabeledContent` header above the
+/// slider because iOS forms hide the slider's built-in label.
+private struct SliderRow<ValueLabel: View>: View {
     let title: LocalizedStringKey
     @Binding var value: Double
     let range: ClosedRange<Double>
-    let lowSymbol: String
-    let highSymbol: String
+    let step: Double = 0.05
+    let neutralValue: Double
+    let formattedValue: String
+    @ViewBuilder let minimumValueLabel: () -> ValueLabel
+    @ViewBuilder let maximumValueLabel: () -> ValueLabel
+
+    private var roundedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { value = ($0 * 100).rounded() / 100 }
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading) {
-            LabeledContent(title, value: value.formatted(.percent.precision(.fractionLength(0))))
-            Slider(value: $value, in: range, step: 0.05) {
+        #if os(macOS)
+        Slider(
+            value: roundedValue,
+            in: range,
+            step: step,
+            neutralValue: neutralValue
+        ) {
+            Text(title)
+            Text(formattedValue)
+                .monospacedDigit()
+        } minimumValueLabel: {
+            minimumValueLabel()
+        } maximumValueLabel: {
+            maximumValueLabel()
+        }
+        .accessibilityValue(formattedValue)
+        #else
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent(title) {
+                Text(formattedValue)
+                    .monospacedDigit()
+            }
+            Slider(
+                value: roundedValue,
+                in: range,
+                step: step,
+                neutralValue: neutralValue
+            ) {
                 Text(title)
             } minimumValueLabel: {
-                Image(systemName: lowSymbol)
+                minimumValueLabel()
             } maximumValueLabel: {
-                Image(systemName: highSymbol)
+                maximumValueLabel()
             }
             .labelsHidden()
+            .accessibilityValue(formattedValue)
         }
+        #endif
     }
 }
 
@@ -182,6 +299,7 @@ private struct ThemeSwatches: View {
                 ForEach(CodeTheme.builtIn) { theme in
                     Button { selection = theme.id } label: { swatch(theme) }
                         .buttonStyle(.plain)
+                        .contentShape(.rect)
                 }
             }
         }
@@ -201,7 +319,7 @@ private struct ThemeSwatches: View {
         let isSelected = selection == theme.id
         return VStack(spacing: 4) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Aa")
+                Text(verbatim: "Aa")
                     .font(.system(.footnote, design: .monospaced, weight: .semibold))
                     .foregroundStyle(color(theme.text))
                 HStack(spacing: 3) {

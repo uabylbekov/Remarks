@@ -7,7 +7,7 @@ import NotesCore
 struct NoteActionsMenu: View {
     let note: Note
     let onNewTag: () -> Void
-    let onExport: () -> Void
+    let onExport: (NoteExportFormat) -> Void
     let onDeleteForever: () -> Void
     let onError: (String) -> Void
 
@@ -18,48 +18,90 @@ struct NoteActionsMenu: View {
     private var library: Library { Library(context: context) }
 
     private var movableFolders: [Folder] {
-        folders.filter { $0.deletedAt == nil }.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        folders
+            .filter { !$0.isDeleted && $0.modelContext != nil && $0.deletedAt == nil }
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    private var liveTags: [Tag] {
+        tags.filter { !$0.isDeleted && $0.modelContext != nil }
     }
 
     var body: some View {
-        if note.deletedAt != nil {
-            Button("Restore", systemImage: "arrow.uturn.backward") { perform { library.restore(note) } }
-            Button("Delete Forever", systemImage: "trash", role: .destructive, action: onDeleteForever)
-        } else {
-            Button(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin") {
-                perform { note.setPinned(!note.isPinned) }
-            }
-            Menu("Move to", systemImage: "folder") {
-                Button("Unfiled", systemImage: "tray") { perform { note.move(to: nil) } }
-                ForEach(movableFolders) { folder in
-                    Button(folder.path, systemImage: "folder") { perform { note.move(to: folder) } }
+        if !note.isDeleted, note.modelContext != nil {
+            if note.deletedAt != nil {
+                Button("Restore", systemImage: "arrow.uturn.backward") { perform { library.restore(note) } }
+                Button("Delete Forever", systemImage: "trash", role: .destructive, action: onDeleteForever)
+            } else {
+                Button(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin") {
+                    perform { note.setPinned(!note.isPinned) }
+                }
+                Menu("Move to", systemImage: "folder") {
+                    Picker("Move to", selection: folderBinding) {
+                        Label("Unfiled", systemImage: "tray")
+                            .tag(UUID?.none)
+                        if !movableFolders.isEmpty {
+                            Divider()
+                            ForEach(movableFolders, id: \.persistentModelID) { folder in
+                                Label(folder.path, systemImage: "folder")
+                                    .tag(Optional(folder.id))
+                            }
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+                Menu("Tags", systemImage: "tag") {
+                    ForEach(liveTags) { tag in
+                        Toggle(tag.name, isOn: binding(for: tag))
+                    }
+                    Button("New Tag…", systemImage: "plus", action: onNewTag)
+                }
+                Menu("Export as", systemImage: "square.and.arrow.up") {
+                    ForEach(NoteExportFormat.allCases) { format in
+                        Button(format.title, systemImage: format.systemImage) { onExport(format) }
+                    }
+                }
+                Divider()
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    perform { library.delete(note) }
                 }
             }
-            Menu("Tags", systemImage: "tag") {
-                ForEach(tags) { tag in
-                    Toggle(tag.name, isOn: binding(for: tag))
-                }
-                Button("New Tag…", systemImage: "plus", action: onNewTag)
-            }
-            Button("Export as Markdown…", systemImage: "square.and.arrow.up", action: onExport)
-            Divider()
-            Button("Delete", systemImage: "trash", role: .destructive) { perform { library.trash(note) } }
         }
     }
 
     private func perform(_ action: () throws -> Void) {
+        guard !note.isDeleted, note.modelContext != nil else { return }
         do {
             try action()
             try context.save()
         } catch {
+            context.rollback()
             onError(error.localizedDescription)
         }
     }
 
+    private var folderBinding: Binding<UUID?> {
+        Binding(
+            get: {
+                guard !note.isDeleted, note.modelContext != nil,
+                      let folder = note.folder, !folder.isDeleted, folder.modelContext != nil else { return nil }
+                return folder.id
+            },
+            set: { targetID in
+                let destination = targetID.flatMap { id in movableFolders.first { $0.id == id } }
+                perform { note.move(to: destination) }
+            }
+        )
+    }
+
     private func binding(for tag: Tag) -> Binding<Bool> {
         Binding(
-            get: { note.tags?.contains { $0 === tag } ?? false },
+            get: {
+                guard !note.isDeleted, note.modelContext != nil, !tag.isDeleted, tag.modelContext != nil else { return false }
+                return note.tags?.contains { $0 === tag } ?? false
+            },
             set: { isOn in
+                guard !tag.isDeleted, tag.modelContext != nil else { return }
                 perform {
                     if isOn {
                         try library.addTag(named: tag.name, to: note)
@@ -83,11 +125,13 @@ private struct NewTagPrompt: ViewModifier {
         content.alert("New Tag", item: $note) { note in
             TextField("Tag name", text: $text)
             Button("Add") {
+                guard !note.isDeleted, note.modelContext != nil else { text = ""; return }
                 do {
                     try Library(context: context).addTag(named: text, to: note)
                     try context.save()
                     text = ""
                 } catch {
+                    context.rollback()
                     errorMessage = error.localizedDescription
                 }
             }
@@ -100,19 +144,26 @@ private struct NewTagPrompt: ViewModifier {
     }
 }
 
-/// Asks before a note is deleted for good, which cannot be undone. Set the binding to the note to ask.
+/// Asks before a note is deleted for good, which cannot be undone. Holds the note's UUID (not a live `@Model`)
+/// so deleting the note while the dialog dismisses can never fault a detached SwiftData backing store.
 private struct DeleteForeverConfirmation: ViewModifier {
     @State private var errorMessage: String?
-    @Binding var note: Note?
+    @Binding var noteID: UUID?
+    let onWillDelete: (UUID) -> Void
     @Environment(\.modelContext) private var context
 
     func body(content: Content) -> some View {
-        content.confirmationDialog("Delete this note forever?", item: $note, titleVisibility: .visible) { note in
+        content.confirmationDialog("Delete this note forever?", item: $noteID, titleVisibility: .visible) { id in
             Button("Delete Forever", role: .destructive) {
+                onWillDelete(id)
                 do {
-                    Library(context: context).deleteForever(note)
+                    let matches = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == id }))
+                    for note in matches where !note.isDeleted && note.modelContext != nil {
+                        Library(context: context).deleteForever(note)
+                    }
                     try context.save()
                 } catch {
+                    context.rollback()
                     errorMessage = error.localizedDescription
                 }
             }
@@ -130,7 +181,10 @@ extension View {
         modifier(NewTagPrompt(note: note))
     }
 
-    func deleteForeverConfirmation(for note: Binding<Note?>) -> some View {
-        modifier(DeleteForeverConfirmation(note: note))
+    func deleteForeverConfirmation(
+        for noteID: Binding<UUID?>,
+        onWillDelete: @escaping (UUID) -> Void = { _ in }
+    ) -> some View {
+        modifier(DeleteForeverConfirmation(noteID: noteID, onWillDelete: onWillDelete))
     }
 }

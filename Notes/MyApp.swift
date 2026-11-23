@@ -44,6 +44,7 @@ import NotesCore
                     .modifier(SpotlightSync())
                     .modelContainer(container)
                     .environment(monitor)
+                    .task { await RichPreviewRenderer.shared.prepare() }
             case .failure(let error):
                 ContentUnavailableView(
                     "Remarks could not open its data",
@@ -87,11 +88,18 @@ private struct LibraryMaintenance: ViewModifier {
             monitor.onImportFinished = purgeOnce
             monitor.start()
             tidy(purging: false)
-            try? await Task.sleep(for: .seconds(60))
-            purgeOnce()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(24 * 60 * 60))
-                tidy(purging: true)
+            do {
+                try await Task.sleep(for: .seconds(60))
+                try Task.checkCancellation()
+                purgeOnce()
+                while !Task.isCancelled {
+                    try await Task.sleep(for: .seconds(24 * 60 * 60))
+                    try Task.checkCancellation()
+                    tidy(purging: true)
+                }
+            } catch {
+                // Closing a window must not trigger an immediate purge by skipping its delay.
+                return
             }
         }
     }
@@ -149,12 +157,16 @@ private struct SpotlightSync: ViewModifier {
 }
 
 #if os(macOS)
-/// New Folder in the File menu, with the shortcut the toolbar button used to own.
+/// New Note and New Folder in the File menu, active even while the sidebar or note list is hidden.
 private struct FileCommands: Commands {
+    @FocusedValue(\.newNote) private var newNote
     @FocusedValue(\.newFolder) private var newFolder
 
     var body: some Commands {
-        CommandGroup(after: .newItem) {
+        CommandGroup(replacing: .newItem) {
+            Button("New Note") { newNote?.run() }
+                .keyboardShortcut("n")
+                .disabled(newNote?.isDisabled ?? true)
             Button("New Folder") { newFolder?.wrappedValue = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(newFolder == nil)
@@ -162,25 +174,34 @@ private struct FileCommands: Commands {
     }
 }
 
-/// The Format menu. The items act on the editor that has focus, and are dimmed when there is none.
+/// The Format menu. The items act on the editor that has focus, and are dimmed when there is none or the note is read-only.
 private struct FormatCommands: Commands {
     @FocusedValue(\.editorCommands) private var editor
 
+    private var isDisabled: Bool {
+        editor == nil || editor?.isEditingTableCell == true || editor?.isReadOnly == true
+    }
+
     var body: some Commands {
         CommandMenu("Format") {
-            Button("Bold") { editor?.perform(.bold) }.keyboardShortcut("b")
-            Button("Italic") { editor?.perform(.italic) }.keyboardShortcut("i")
-            Button("Strikethrough") { editor?.perform(.strikethrough) }
-            Button("Inline Code") { editor?.perform(.inlineCode) }.keyboardShortcut("e")
-            Button("Link") { editor?.perform(.link) }.keyboardShortcut("k")
-            Divider()
-            Button("Heading") { editor?.perform(.heading) }
-            Button("Bulleted List") { editor?.perform(.bulletList) }
-            Button("Numbered List") { editor?.perform(.numberedList) }
-            Button("Checklist") { editor?.perform(.checklist) }
-            Button("Table") { editor?.perform(.table) }
-            Button("Quote") { editor?.perform(.quote) }
-            Button("Code Block") { editor?.perform(.codeBlock) }.keyboardShortcut("c", modifiers: [.command, .option])
+            Group {
+                Button("Bold") { editor?.perform(.bold) }.keyboardShortcut("b")
+                Button("Italic") { editor?.perform(.italic) }.keyboardShortcut("i")
+                Button("Strikethrough") { editor?.perform(.strikethrough) }
+                Button("Inline Code") { editor?.perform(.inlineCode) }.keyboardShortcut("e")
+                Button("Link") { editor?.perform(.link) }.keyboardShortcut("k")
+                Divider()
+                Button("Heading") { editor?.perform(.heading) }
+                Button("Bulleted List") { editor?.perform(.bulletList) }
+                Button("Numbered List") { editor?.perform(.numberedList) }
+                Button("Checklist") { editor?.perform(.checklist) }
+                Button("Table") { editor?.perform(.table) }
+                Button("Quote") { editor?.perform(.quote) }
+                Button("Equation") { editor?.perform(.math) }
+                Button("Diagram") { editor?.perform(.diagram) }
+                Button("Code Block") { editor?.perform(.codeBlock) }.keyboardShortcut("c", modifiers: [.command, .option])
+            }
+            .disabled(isDisabled)
         }
     }
 }

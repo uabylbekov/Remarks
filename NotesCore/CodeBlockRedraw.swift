@@ -46,8 +46,9 @@ public enum CodeBlockRedraw {
             } else if range.location >= removedEnd {
                 kept.insert(Key(SyntaxToken(scope: token.scope, range: NSRange(location: range.location + delta, length: range.length))))
             } else {
-                let end = max(editedRange.location, NSMaxRange(range) + delta)
-                affected = NSUnionRange(affected, NSRange(location: range.location, length: end - range.location))
+                let start = min(range.location, editedRange.location)
+                let end = max(start, NSMaxRange(range) + delta)
+                affected = NSUnionRange(affected, NSRange(location: start, length: end - start))
             }
         }
 

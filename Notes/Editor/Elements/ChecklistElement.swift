@@ -8,7 +8,17 @@ struct ChecklistElement: MarkdownElement {
     func style(_ paragraph: NSMutableAttributedString, line: ElementLine, services: ElementServices) -> Bool {
         guard case .checklist(let markPosition, let isChecked) = line.block.kind else { return false }
         let full = NSRange(location: 0, length: paragraph.length)
-        let markRange = NSRange(location: markPosition.location - line.range.location, length: markPosition.length)
+        let overlap = NSIntersectionRange(markPosition, line.range)
+        guard overlap.length > 0 else {
+            // A soft line break (\u{2028}) continuation paragraph has no checkbox prefix of its own.
+            if isChecked {
+                paragraph.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: full)
+                paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: full)
+            }
+            _ = InlineStyler.style(paragraph, selection: line.selection)
+            return true
+        }
+        let markRange = NSRange(location: overlap.location - line.range.location, length: overlap.length)
 
         let base = (paragraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont) ?? EditorTheme.proseFont
         #if os(iOS)
@@ -47,7 +57,7 @@ struct ChecklistElement: MarkdownElement {
             paragraph.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: content)
             paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: content)
         }
-        _ = InlineStyler.style(paragraph, hidesMarkers: true, shrinksMarkers: true)
+        _ = InlineStyler.style(paragraph, selection: line.selection)
         return true
     }
 
@@ -67,7 +77,8 @@ struct ChecklistElement: MarkdownElement {
 /// Draws a round checkbox in the space of a checklist item's hidden `- [ ] ` mark.
 final class ChecklistFragment: NSTextLayoutFragment {
     private func number(for key: NSAttributedString.Key) -> CGFloat {
-        let value = (textElement as? NSTextParagraph)?.attributedString.attribute(key, at: 0, effectiveRange: nil) as? NSNumber
+        guard let paragraph = (textElement as? NSTextParagraph)?.attributedString, paragraph.length > 0 else { return 0 }
+        let value = paragraph.attribute(key, at: 0, effectiveRange: nil) as? NSNumber
         return CGFloat(value?.doubleValue ?? 0)
     }
 
@@ -82,9 +93,11 @@ final class ChecklistFragment: NSTextLayoutFragment {
         #if os(iOS)
         let side = max(14, hiddenWidth - 10)
         #else
-        let side = max(14, min(lineHeight * 0.9, hiddenWidth - 6))
+        let side = max(14, min(lineHeight * 0.9, hiddenWidth - 8))
         #endif
-        let font = (textElement as? NSTextParagraph)?.attributedString.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont
+        let font = paragraph.flatMap { text in
+            text.length > 0 ? text.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont : nil
+        }
         let baseline = (line?.typographicBounds.minY ?? 0) + (line?.glyphOrigin.y ?? lineHeight)
         let center = font.map { baseline - $0.capHeight / 2 } ?? lineHeight / 2
         return CGRect(x: layoutFragmentFrame.minX + (line?.typographicBounds.minX ?? 0) + markerX,

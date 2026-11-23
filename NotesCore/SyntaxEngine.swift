@@ -52,6 +52,7 @@ public final class SyntaxEngine: @unchecked Sendable {
 
     /// Returns nil if a pattern is invalid or contains its own capturing group (which would break scope lookup).
     public init?(_ grammar: SyntaxGrammar) {
+        guard !grammar.rules.isEmpty else { return nil }
         let combined = grammar.rules.map { "(\($0.pattern))" }.joined(separator: "|")
         let options: NSRegularExpression.Options = grammar.ignoresCase ? [.caseInsensitive] : []
         guard let regex = try? NSRegularExpression(pattern: combined, options: options),

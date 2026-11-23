@@ -15,10 +15,10 @@ public struct MarkdownTable: Equatable, Sendable {
     public var columnCount: Int { header.count }
 
     public init(header: [String], alignments: [Alignment]? = nil, rows: [[String]] = []) {
-        let header = header.isEmpty ? [""] : header
+        let header = (header.isEmpty ? [""] : header).map(Self.clean)
         self.header = header
         self.alignments = Self.fit(alignments ?? [], to: header.count, with: .none)
-        self.rows = rows.map { Self.fit($0, to: header.count, with: "") }
+        self.rows = rows.map { Self.fit($0.map(Self.clean), to: header.count, with: "") }
     }
 
     /// A table of empty cells, with "Column 1", "Column 2" and so on as its header.
@@ -100,7 +100,7 @@ public struct MarkdownTable: Equatable, Sendable {
 
         func line(_ values: [String]) -> String {
             let padded = values.enumerated().map { column, value in
-                value.padding(toLength: widths[column], withPad: " ", startingAt: 0)
+                value + String(repeating: " ", count: max(0, widths[column] - value.count))
             }
             return "| " + padded.joined(separator: " | ") + " |"
         }

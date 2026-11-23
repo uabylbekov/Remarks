@@ -3,7 +3,7 @@ import Foundation
 /// An inline Markdown construct inside one line of text. Ranges are UTF-16, relative to the scanned string.
 public struct InlineSpan: Equatable, Sendable {
     public enum Kind: Sendable {
-        case bold, italic, boldItalic, strikethrough, code, link
+        case bold, italic, boldItalic, strikethrough, code, link, math
     }
 
     public let kind: Kind
@@ -25,27 +25,26 @@ public enum InlineScanner {
         let kind: InlineSpan.Kind
         let regex: NSRegularExpression
         let contentGroup: Int
-        let markerLength: Int
         let destinationGroup: Int?
         /// A bare address is plain text, so one inside a code span or a written-out link is left alone.
         let skipsInsideLinks: Bool
     }
 
     private static func rule(
-        _ kind: InlineSpan.Kind, _ pattern: String, content: Int, marker: Int, destination: Int? = nil, skipsInsideLinks: Bool = false
+        _ kind: InlineSpan.Kind, _ pattern: String, content: Int, destination: Int? = nil, skipsInsideLinks: Bool = false
     ) -> Rule? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         return Rule(
-            kind: kind, regex: regex, contentGroup: content, markerLength: marker, destinationGroup: destination,
+            kind: kind, regex: regex, contentGroup: content, destinationGroup: destination,
             skipsInsideLinks: skipsInsideLinks
         )
     }
 
     /// Explicit links precede autolinks. Code and emphasis use their own delimiter scanners.
     private static let rules: [Rule] = [
-        rule(.link, #"(?<!!)\[([^\]\n]+)\]\("#, content: 1, marker: 1),
+        rule(.link, #"(?<!!)\[([^\]\n]+)\]\("#, content: 1),
         // A web address typed as plain text. It stops before the punctuation that ends a sentence.
-        rule(.link, #"https?://[^\s<>]*[^\s<>.,;:!?'")\]]"#, content: 0, marker: 0, destination: 0, skipsInsideLinks: true),
+        rule(.link, #"https?://[^\s<>]*[^\s<>.,;:!?'")\]]"#, content: 0, destination: 0, skipsInsideLinks: true),
     ].compactMap { $0 }
 
     public static func spans(in text: String) -> [InlineSpan] {
@@ -67,14 +66,20 @@ public enum InlineScanner {
                     range.length = NSMaxRange(destinationRange) + 1 - range.location
                 }
 
+                let leading = NSRange(location: range.location, length: content.location - range.location)
+                let trailing = NSRange(location: NSMaxRange(content), length: NSMaxRange(range) - NSMaxRange(content))
+                let markers = [leading, trailing].filter { $0.length > 0 }
+
                 if accepted.contains(where: { partiallyOverlap($0.range, range) }) { continue }
                 if accepted.contains(where: { $0.kind == .code && contains($0.range, range) }) { continue }
+                // A bare autolink cannot wrap or intersect an inline code span (e.g. `https://x/`code``).
+                if rule.skipsInsideLinks, accepted.contains(where: { $0.kind == .code && NSIntersectionRange($0.range, range).length > 0 }) { continue }
+                // Code spans inside link markers (e.g. a backticked destination) must not create overlapping markers.
+                if accepted.contains(where: { span in markers.contains { NSIntersectionRange(span.range, $0).length > 0 } }) { continue }
                 // A match that reaches into the marks of a span it sits in is those marks read again (`***a***` as `**` + `*a`).
                 if accepted.contains(where: { contains($0.range, range) && $0.markers.contains { NSIntersectionRange($0, range).length > 0 } }) { continue }
                 if rule.skipsInsideLinks, accepted.contains(where: { $0.kind == .link && contains($0.range, range) }) { continue }
 
-                let leading = NSRange(location: range.location, length: content.location - range.location)
-                let trailing = NSRange(location: NSMaxRange(content), length: NSMaxRange(range) - NSMaxRange(content))
                 let destination = explicitDestination ?? rule.destinationGroup.flatMap { group -> String? in
                     let urlRange = match.range(at: group)
                     return urlRange.location == NSNotFound ? nil : (text as NSString).substring(with: urlRange)
@@ -83,11 +88,12 @@ public enum InlineScanner {
                     kind: rule.kind,
                     range: range,
                     content: content,
-                    markers: [leading, trailing].filter { $0.length > 0 },
+                    markers: markers,
                     destination: destination
                 ))
             }
         }
+        if text.contains("$") { accepted += mathSpans(in: source, excluding: accepted) }
         accepted += emphasisSpans(in: source, excluding: accepted)
         return accepted.sorted { $0.range.location == $1.range.location ? $0.range.length > $1.range.length : $0.range.location < $1.range.location }
     }
@@ -121,6 +127,41 @@ public enum InlineScanner {
         return spans
     }
 
+    private static func mathSpans(in source: NSString, excluding spans: [InlineSpan]) -> [InlineSpan] {
+        func whitespace(_ offset: Int) -> Bool {
+            guard offset >= 0, offset < source.length else { return true }
+            return UnicodeScalar(source.character(at: offset)).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false
+        }
+        var result: [InlineSpan] = []
+        var position = 0
+        while position < source.length {
+            let start = position
+            guard source.character(at: start) == 36, !isEscaped(start, in: source),
+                  start + 1 < source.length, source.character(at: start + 1) != 36,
+                  (start == 0 || source.character(at: start - 1) != 36), !whitespace(start + 1),
+                  !spans.contains(where: { NSLocationInRange(start, $0.range) }) else { position += 1; continue }
+            position += 1
+            while position < source.length {
+                let unit = source.character(at: position)
+                if [10, 13, 0x2028, 0x2029].contains(unit) { break }
+                if unit == 36, !isEscaped(position, in: source) { break }
+                position += 1
+            }
+            guard position < source.length, source.character(at: position) == 36 else { continue }
+            let close = position
+            position += 1
+            let next = position < source.length ? source.character(at: position) : 0
+            let range = NSRange(location: start, length: position - start)
+            guard close > start + 1, !whitespace(close - 1), next != 36, !(48...57).contains(next),
+                  !spans.contains(where: { NSIntersectionRange($0.range, range).length > 0 }) else { continue }
+            result.append(InlineSpan(kind: .math, range: range,
+                                    content: NSRange(location: start + 1, length: close - start - 1),
+                                    markers: [NSRange(location: start, length: 1), NSRange(location: close, length: 1)],
+                                    destination: nil))
+        }
+        return result
+    }
+
     private struct Delimiter {
         let location: Int
         let length: Int
@@ -132,19 +173,46 @@ public enum InlineScanner {
     }
 
     private static func emphasisSpans(in source: NSString, excluding spans: [InlineSpan]) -> [InlineSpan] {
+        /// Reads the full Unicode scalar at a UTF-16 offset, decoding surrogate pairs cleanly.
+        func scalar(at offset: Int) -> UnicodeScalar? {
+            guard offset >= 0, offset < source.length else { return nil }
+            let unit = source.character(at: offset)
+            if (0xD800...0xDBFF).contains(unit), offset + 1 < source.length {
+                let low = source.character(at: offset + 1)
+                if (0xDC00...0xDFFF).contains(low) {
+                    return UnicodeScalar(0x10000 + ((UInt32(unit) - 0xD800) << 10) + (UInt32(low) - 0xDC00))
+                }
+            }
+            if (0xDC00...0xDFFF).contains(unit), offset > 0 {
+                let high = source.character(at: offset - 1)
+                if (0xD800...0xDBFF).contains(high) {
+                    return UnicodeScalar(0x10000 + ((UInt32(high) - 0xD800) << 10) + (UInt32(unit) - 0xDC00))
+                }
+            }
+            return UnicodeScalar(unit)
+        }
         func whitespace(_ offset: Int) -> Bool {
             guard offset >= 0, offset < source.length else { return true }
-            return UnicodeScalar(source.character(at: offset)).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false
+            return scalar(at: offset).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false
         }
         func punctuation(_ offset: Int) -> Bool {
             guard offset >= 0, offset < source.length else { return false }
-            return UnicodeScalar(source.character(at: offset)).map {
+            return scalar(at: offset).map {
                 CharacterSet.punctuationCharacters.contains($0) || CharacterSet.symbols.contains($0)
             } ?? false
         }
+        func containsNewline(from start: Int, to end: Int) -> Bool {
+            var index = start
+            while index < end {
+                let unit = source.character(at: index)
+                if unit == 10 || unit == 13 || unit == 0x2029 { return true }
+                index += 1
+            }
+            return false
+        }
         func protected(_ offset: Int) -> Bool {
             spans.contains { span in
-                (span.kind == .code && NSLocationInRange(offset, span.range))
+                ((span.kind == .code || span.kind == .math) && NSLocationInRange(offset, span.range))
                     || span.markers.contains { NSLocationInRange(offset, $0) }
             }
         }
@@ -171,13 +239,12 @@ public enum InlineScanner {
 
         var result: [InlineSpan] = []
         for closeIndex in delimiters.indices where delimiters[closeIndex].closes {
-            while delimiters[closeIndex].remaining > 0 {
+            var searchLimit = closeIndex
+            while delimiters[closeIndex].remaining > 0, searchLimit > 0 {
                 let close = delimiters[closeIndex]
-                guard let openIndex = delimiters[..<closeIndex].lastIndex(where: { open in
+                guard let openIndex = delimiters[..<searchLimit].lastIndex(where: { open in
                     guard open.opens, open.unit == close.unit, open.remaining > 0 else { return false }
-                    let between = NSRange(location: open.location + open.length,
-                                          length: close.location - open.location - open.length)
-                    if source.substring(with: between).contains(where: \.isNewline) { return false }
+                    if containsNewline(from: open.location + open.length, to: close.location) { return false }
                     if close.unit != 126, open.closes || close.opens,
                        (open.length + close.length).isMultiple(of: 3),
                        !(open.length.isMultiple(of: 3) && close.length.isMultiple(of: 3)) { return false }
@@ -186,7 +253,7 @@ public enum InlineScanner {
                 let open = delimiters[openIndex]
                 let available = min(open.remaining, close.remaining)
                 let count = close.unit == 126 ? 2 : (available == 3 ? 3 : min(2, available))
-                guard available >= count else { break }
+                guard available >= count else { searchLimit = openIndex; continue }
                 let start = open.location + open.remaining - count
                 let end = close.location + close.consumed + count
                 let content = NSRange(location: start + count, length: end - start - 2 * count)
@@ -197,9 +264,11 @@ public enum InlineScanner {
                         range: range, content: content,
                         markers: [NSRange(location: start, length: count), NSRange(location: end - count, length: count)],
                         destination: nil))
+                    delimiters[openIndex].remaining -= count
+                    delimiters[closeIndex].remaining -= count
+                } else {
+                    searchLimit = openIndex
                 }
-                delimiters[openIndex].remaining -= count
-                delimiters[closeIndex].remaining -= count
             }
         }
         return result

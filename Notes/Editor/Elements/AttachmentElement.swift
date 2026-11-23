@@ -10,7 +10,6 @@ struct AttachmentElement: MarkdownElement {
     /// The tallest a picture is drawn, in points.
     private static let maxImageHeight: CGFloat = 280
 
-    var readsInline: Bool { false }
 
     func style(_ paragraph: NSMutableAttributedString, line: ElementLine, services: ElementServices) -> Bool {
         guard case .attachment(let attachment) = line.block.kind else { return false }
@@ -33,7 +32,7 @@ struct AttachmentElement: MarkdownElement {
         style.paragraphSpacingBefore = 4
         // One line only, so a long link never makes the line taller.
         style.lineBreakMode = .byClipping
-        paragraph.addAttribute(.paragraphStyle, value: style, range: full)
+        paragraph.addAttribute(.paragraphStyle, value: style.copy(), range: full)
         paragraph.addAttribute(LivePreviewController.attachmentKey, value: attachment.id.uuidString, range: full)
         paragraph.addAttribute(LivePreviewController.attachmentHeightKey, value: Double(height), range: full)
 

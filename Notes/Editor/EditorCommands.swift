@@ -16,21 +16,34 @@ final class EditorCommands {
     var attachmentRequest: AttachmentSource?
     /// Pictures and files pasted into the editor. The screen turns them into attachments and clears the list.
     var pastedFiles: [PastedFile] = []
+    /// Local file URLs pasted from Finder. Read asynchronously off the main thread before inserting.
+    var pastedFileURLs: [URL] = []
 
     /// Document-level commands must not target an old source selection while a nested table field owns input.
     var isEditingTableCell = false
+    /// Notes in Recently Deleted are read-only until restored.
+    var isReadOnly = false
+    /// Formatting commands currently active at the caret or selection, used to highlight toolbar / keyboard bar buttons.
+    var activeCommands: Set<MarkdownCommand> = []
 
     func perform(_ command: MarkdownCommand) {
-        guard !isEditingTableCell else { return }
+        guard !isEditingTableCell, !isReadOnly else { return }
         handler?(command)
     }
-    func pasted(_ files: [PastedFile]) { pastedFiles += files }
+    func pasted(_ files: [PastedFile]) {
+        guard !isReadOnly else { return }
+        pastedFiles += files
+    }
+    func pasted(fileURLs: [URL]) {
+        guard !isReadOnly else { return }
+        pastedFileURLs += fileURLs
+    }
     func insertBlock(_ markdown: String) {
-        guard !isEditingTableCell else { return }
+        guard !isEditingTableCell, !isReadOnly else { return }
         insert?(markdown)
     }
     func attach(from source: AttachmentSource) {
-        guard !isEditingTableCell else { return }
+        guard !isEditingTableCell, !isReadOnly else { return }
         attachmentRequest = source
     }
 }

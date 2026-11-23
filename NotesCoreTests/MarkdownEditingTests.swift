@@ -254,6 +254,28 @@ struct MarkdownEditingTests {
             #expect(!edit.replacement.isEmpty)
         }
     }
+
+    @Test func headingCycleWithFullLineSelectionStaysInBounds() {
+        let text = "### Title"
+        let result = apply(.heading, to: text, selection: NSRange(location: 0, length: text.utf16.count))
+        #expect(result.text == "Title")
+        #expect(NSMaxRange(result.selection) <= result.text.utf16.count)
+    }
+
+    @Test func inlineCodeUntoggleStripsCommonMarkPadding() {
+        let text = "`` `x` ``"
+        let result = apply(.inlineCode, to: text, selection: NSRange(location: 4, length: 0))
+        #expect(result.text == "`x`")
+    }
+
+    @Test func numberedListFollowedByDashesIsNotSetextHeading() {
+        let document = MarkdownDocument("1. item\n---\n")
+        #expect(document.blocks.count == 2)
+        if case .numbered = document.blocks[0].kind {} else {
+            Issue.record("Expected first block to be a numbered list item")
+        }
+        #expect(document.blocks[1].kind == .rule)
+    }
 }
 
 struct TableEditingTests {

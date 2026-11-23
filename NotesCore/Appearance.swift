@@ -164,29 +164,44 @@ public enum FontChoice: Codable, Hashable, Sendable {
 
 public struct AppearanceSettings: Codable, Equatable, Sendable {
     public static let sizeScaleRange = 0.8...1.6
-    public static let lineSpacingRange = 0.0...0.6
+    public static let lineSpacingRange = 0.0...1.0
+    public static let lineHeightRange = 1.0...2.0
+    public static let defaultSizeScale = 1.0
+    public static let defaultLineHeight = 1.15
 
     public var textFont: FontChoice = .system
     public var codeFont: FontChoice = .design(.monospaced)
     /// Multiplies the Dynamic Type size, so it works together with it (F3).
-    public var sizeScale = 1.0
+    public var sizeScale = AppearanceSettings.defaultSizeScale
     /// Extra space between lines, as a fraction of the font size (F6).
     public var lineSpacing = 0.15
     public var codeThemeID = CodeTheme.standard.id
     /// Lets the code font join characters such as `->` and `!=` into one symbol. Only Fira Code and JetBrains Mono do it.
     public var codeLigatures = true
 
+    /// Line height as a multiplier of the font size (`1.0` to `2.0`, default `1.15`).
+    /// Backed by `lineSpacing` (`lineHeight - 1`) so stored settings stay compatible with earlier versions.
+    public var lineHeight: Double {
+        get { ((1.0 + lineSpacing) * 100).rounded() / 100 }
+        set {
+            let clamped = min(max(newValue, Self.lineHeightRange.lowerBound), Self.lineHeightRange.upperBound)
+            lineSpacing = ((clamped - 1.0) * 100).rounded() / 100
+        }
+    }
+
     public init() {}
 
-    // Settings written by an older version lack the newer keys. Missing keys keep their defaults instead of failing.
+    // Settings written by an older version lack the newer keys, and a newer version may write a value this one does
+    // not know (a new font design, say). Each such key keeps its default, so one unreadable value never costs the rest
+    // of the settings, and the next save does not overwrite them with defaults.
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        textFont = try values.decodeIfPresent(FontChoice.self, forKey: .textFont) ?? textFont
-        codeFont = try values.decodeIfPresent(FontChoice.self, forKey: .codeFont) ?? codeFont
-        sizeScale = try values.decodeIfPresent(Double.self, forKey: .sizeScale) ?? sizeScale
-        lineSpacing = try values.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? lineSpacing
-        codeThemeID = try values.decodeIfPresent(String.self, forKey: .codeThemeID) ?? codeThemeID
-        codeLigatures = try values.decodeIfPresent(Bool.self, forKey: .codeLigatures) ?? codeLigatures
+        textFont = (try? values.decodeIfPresent(FontChoice.self, forKey: .textFont)) ?? textFont
+        codeFont = (try? values.decodeIfPresent(FontChoice.self, forKey: .codeFont)) ?? codeFont
+        sizeScale = (try? values.decodeIfPresent(Double.self, forKey: .sizeScale)) ?? sizeScale
+        lineSpacing = (try? values.decodeIfPresent(Double.self, forKey: .lineSpacing)) ?? lineSpacing
+        codeThemeID = (try? values.decodeIfPresent(String.self, forKey: .codeThemeID)) ?? codeThemeID
+        codeLigatures = (try? values.decodeIfPresent(Bool.self, forKey: .codeLigatures)) ?? codeLigatures
     }
 
     /// Keeps stored values inside their allowed ranges, in case another device wrote something unexpected.

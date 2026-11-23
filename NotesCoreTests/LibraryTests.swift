@@ -14,6 +14,86 @@ struct LibraryTests {
         return (Library(context: context), context)
     }
 
+    @Test func purgingAnExpiredParentKeepsAChildWithinItsOwnRetentionPeriod() throws {
+        let (library, context) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+        parent.deletedAt = t0
+        child.deletedAt = t0.addingTimeInterval(29 * day)
+        let childID = child.id
+        try context.save()
+
+        let report = try library.purgeExpired(now: t0.addingTimeInterval(31 * day))
+        try context.save()
+        let remaining = try context.fetch(FetchDescriptor<Folder>())
+        #expect(report.folders == 1)
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == childID)
+        #expect(remaining.first?.parent == nil)
+        #expect(remaining.first?.deletedAt == t0.addingTimeInterval(29 * day))
+    }
+
+    @Test func emptyTrashDoesNotCascadeIntoALiveSyncedChild() throws {
+        let (library, context) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+        let childID = child.id
+        parent.deletedAt = t0
+        try context.save()
+
+        try library.emptyTrash()
+        try context.save()
+        let remaining = try context.fetch(FetchDescriptor<Folder>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == childID)
+        #expect(remaining.first?.parent == nil)
+    }
+
+    @Test func deletingAnEmptyDraftDismissesItWithoutAddingItToTrash() throws {
+        let (library, context) = try makeLibrary()
+        let draft = library.createNote(body: " \n\t")
+        let draftID = draft.id
+        let existing = library.createNote(body: "Keep me")
+        try context.save()
+
+        library.delete(draft)
+        try context.save()
+
+        let remaining = try context.fetch(FetchDescriptor<Note>())
+        #expect(!remaining.contains { $0.id == draftID })
+        #expect(remaining.first?.id == existing.id)
+        #expect(remaining.allSatisfy { $0.deletedAt == nil })
+    }
+
+    @Test func deletingANoteWithContentMovesItToRecentlyDeleted() throws {
+        let (library, context) = try makeLibrary()
+        let note = library.createNote(body: "Keep this recoverable")
+        let noteID = note.id
+        try context.save()
+
+        library.delete(note, now: t0)
+        try context.save()
+
+        let remaining = try #require(context.fetch(FetchDescriptor<Note>()).first { $0.id == noteID })
+        #expect(remaining.deletedAt == t0)
+        #expect(remaining.body == "Keep this recoverable")
+    }
+
+    @Test func aBlankNoteWithAnAttachmentIsRecoverableWhenDeleted() throws {
+        let (library, context) = try makeLibrary()
+        let note = library.createNote()
+        try AttachmentStore(context: context).add(
+            data: Data([1, 2]), fileName: "Plan.pdf", typeIdentifier: "com.adobe.pdf", to: note
+        )
+        try context.save()
+
+        library.delete(note, now: t0)
+        try context.save()
+
+        #expect(note.deletedAt == t0)
+        #expect(note.attachments?.first?.data == Data([1, 2]))
+    }
+
     // MARK: Tags
 
     @Test func tagLookupIgnoresCaseAndAccentsAndReusesTheExistingTag() throws {
@@ -83,6 +163,72 @@ struct LibraryTests {
         let notes = try context.fetch(FetchDescriptor<Note>())
         #expect(notes.count == 1)
         #expect(notes.first?.body == "fresh")
+    }
+
+    @Test func recoveryCopyKeepsIndependentAttachmentsAndTags() throws {
+        let (library, context) = try makeLibrary()
+        let note = library.createNote(body: "Incoming", now: t0)
+        try library.addTag(named: "important", to: note)
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1, 2, 3]), fileName: "Plan.pdf", typeIdentifier: "com.adobe.pdf", to: note
+        )
+        attachment.altText = "Plan"
+        note.setBody("Incoming\n" + AttachmentStore.markdown(for: attachment))
+        let copy = library.createRecoveryCopy(of: note)
+        try context.save()
+
+        let cloned = try #require(copy.attachments?.first)
+        #expect(copy.id != note.id)
+        #expect(cloned.id != attachment.id)
+        #expect(cloned.data == attachment.data)
+        #expect(cloned.altText == "Plan")
+        #expect(copy.tags?.first?.name == "important")
+        #expect(AttachmentLine.references(in: copy.body) == [cloned.id])
+        #expect(AttachmentLine.references(in: note.body) == [attachment.id])
+
+        library.deleteForever(note)
+        try context.save()
+        #expect(copy.attachments?.first?.data == Data([1, 2, 3]))
+    }
+
+    @Test func dedupeKeepsAttachmentsDeliveredOnTheLosingRow() throws {
+        let (library, context) = try makeLibrary()
+        let stale = library.createNote(now: t0)
+        let fresh = library.createNote(now: t0.addingTimeInterval(100))
+        stale.id = fresh.id
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([4, 5]), fileName: "Plan.pdf", typeIdentifier: "com.adobe.pdf", to: stale
+        )
+        let attachmentID = attachment.id
+        fresh.setBody(AttachmentStore.markdown(for: attachment), now: t0.addingTimeInterval(100))
+        try context.save()
+
+        #expect(try library.dedupeNotes() == 1)
+        try context.save()
+        #expect(fresh.attachments?.first?.id == attachmentID)
+        #expect(fresh.attachments?.first?.data == Data([4, 5]))
+        #expect(try context.fetch(FetchDescriptor<NotesCore.Attachment>()).count == 1)
+    }
+
+    @Test func dedupeFillsAnAttachmentWhosePayloadHasNotArrived() throws {
+        let (library, context) = try makeLibrary()
+        let stale = library.createNote(now: t0)
+        let fresh = library.createNote(now: t0.addingTimeInterval(100))
+        stale.id = fresh.id
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([7, 8]), fileName: "Plan.pdf", typeIdentifier: "com.adobe.pdf", to: stale
+        )
+        let pending = Attachment(id: attachment.id, fileName: "Plan.pdf", typeIdentifier: "com.adobe.pdf")
+        context.insert(pending)
+        pending.note = fresh
+        fresh.setBody(AttachmentStore.markdown(for: attachment), now: t0.addingTimeInterval(100))
+        try context.save()
+
+        #expect(try library.dedupeNotes() == 1)
+        try context.save()
+        #expect(fresh.attachments?.count == 1)
+        #expect(pending.data == Data([7, 8]))
+        #expect(pending.byteCount == 2)
     }
 
     // MARK: Folders
@@ -269,5 +415,130 @@ struct LibraryTests {
         let unfiled = try library.unfiledNotes()
         #expect(unfiled.count == 1)
         #expect(unfiled.first === loose)
+    }
+
+    @Test func libraryErrorsProvideHumanReadableDescriptions() {
+        #expect(LibraryError.emptyName.errorDescription == "The name can’t be empty.")
+        #expect(LibraryError.wouldCreateCycle.errorDescription == "A folder can’t be moved inside itself.")
+        #expect(LibraryError.duplicateName.errorDescription == "A folder with that name already exists here.")
+    }
+
+    // MARK: Folders left inside the trash
+
+    /// Another device can make a subfolder live again, or create one, after this device trashed its parent.
+    @Test func aLiveFolderInsideATrashedFolderGoesToTheTopLevel() throws {
+        let (library, context) = try makeLibrary()
+        let other = try library.createFolder(named: "Other", now: t0)
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+        library.trash(parent, now: t0)
+        child.deletedAt = nil
+        try context.save()
+
+        #expect(try library.rescueOrphanedFolders() == 1)
+        #expect(child.parent == nil)
+        #expect(child.sortIndex > other.sortIndex)
+        // Nothing is left to rescue.
+        #expect(try library.rescueOrphanedFolders() == 0)
+    }
+
+    @Test func aRescuedFolderSurvivesItsParentBeingPurged() throws {
+        let (library, context) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+        let note = library.createNote(body: "kept", in: child, now: t0)
+        library.trash(parent, now: t0)
+        child.deletedAt = nil
+        note.deletedAt = nil
+        try context.save()
+
+        let report = try library.runMaintenance(now: t0.addingTimeInterval(31 * day))
+        try context.save()
+
+        #expect(report.rescuedFolders == 1)
+        #expect(report.purgedFolders == 1)
+        #expect(!child.isDeleted)
+        #expect(child.parent == nil)
+        #expect(note.folder === child)
+    }
+
+    @Test func aLiveFolderInsideALiveFolderIsLeftAlone() throws {
+        let (library, _) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+
+        #expect(try library.rescueOrphanedFolders() == 0)
+        #expect(child.parent === parent)
+    }
+
+    // MARK: Folder names
+
+    @Test func siblingFoldersCannotShareANameIgnoringCaseAndAccents() throws {
+        let (library, _) = try makeLibrary()
+        try library.createFolder(named: "Café")
+        #expect(throws: LibraryError.duplicateName) { try library.createFolder(named: "  cafe ") }
+
+        let parent = try library.createFolder(named: "Parent")
+        try library.createFolder(named: "Notes", in: parent)
+        #expect(throws: LibraryError.duplicateName) { try library.createFolder(named: "notes", in: parent) }
+        // The same name under another parent, or at the top level, is a different place.
+        try library.createFolder(named: "Notes")
+        let other = try library.createFolder(named: "Other")
+        try library.createFolder(named: "Notes", in: other)
+    }
+
+    @Test func aTrashedFolderDoesNotBlockItsName() throws {
+        let (library, _) = try makeLibrary()
+        let old = try library.createFolder(named: "Ideas", now: t0)
+        library.trash(old, now: t0)
+        try library.createFolder(named: "Ideas")
+    }
+
+    @Test func renamingToASiblingsNameIsRejectedButChangingCaseIsNot() throws {
+        let (library, _) = try makeLibrary()
+        let work = try library.createFolder(named: "Work")
+        let home = try library.createFolder(named: "Home")
+
+        #expect(throws: LibraryError.duplicateName) { try library.rename(home, to: "work") }
+        #expect(home.name == "Home")
+        try library.rename(work, to: "WORK")
+        #expect(work.name == "WORK")
+    }
+
+    @Test func movingUnderAParentThatHasTheNameIsRejectedButReorderingIsNot() throws {
+        let (library, _) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent")
+        try library.createFolder(named: "Notes", in: parent)
+        let first = try library.createFolder(named: "First", in: parent)
+        let second = try library.createFolder(named: "Second", in: parent)
+        let topLevel = try library.createFolder(named: "notes")
+
+        #expect(throws: LibraryError.duplicateName) { try library.move(topLevel, to: parent) }
+        #expect(topLevel.parent == nil)
+        // Same parent: only the order changes.
+        try library.move(second, to: parent, before: first)
+        #expect(second.parent === parent)
+    }
+
+    @Test func emptyTrashRemovesNestedTrashedFoldersAndNotesCleanly() throws {
+        let (library, context) = try makeLibrary()
+        let parent = try library.createFolder(named: "Parent", now: t0)
+        let child = try library.createFolder(named: "Child", in: parent, now: t0)
+        let grandchild = try library.createFolder(named: "Grandchild", in: child, now: t0)
+        _ = library.createNote(body: "in parent", in: parent, now: t0)
+        _ = library.createNote(body: "in grandchild", in: grandchild, now: t0)
+        let liveNote = library.createNote(body: "keep me", now: t0)
+        library.trash(parent, now: t0)
+        try context.save()
+
+        let removed = try library.emptyTrash()
+        try context.save()
+
+        #expect(removed.notes == 2)
+        #expect(removed.folders == 3)
+        let remainingNotes = try context.fetch(FetchDescriptor<Note>())
+        #expect(remainingNotes.count == 1)
+        #expect(remainingNotes.first?.id == liveNote.id)
+        #expect(try context.fetch(FetchDescriptor<Folder>()).isEmpty)
     }
 }

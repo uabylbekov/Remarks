@@ -9,7 +9,7 @@ supersedes the historical keyboard-bar and source-mode presentation descriptions
 ## Decisions (already made)
 
 - TextKit 2 text view (`UITextView` / `NSTextView`) wrapped for SwiftUI.
-- Live preview: prose in the text font, code blocks with a background and the code font, Markdown marks hidden except on the line being edited.
+- Live styling: visible, editable Markdown markers in a muted color; code in a monospace font with syntax colors on the normal background. Tables and checkboxes remain rendered controls, with whole-note source editing available from the Note menu.
 - Markdown text is the only source of truth. All styling is display-only (content storage delegate and a layout fragment), so selection, copy, undo, and sync always see the real characters.
 - Syntax highlighting uses the native regex grammar engine (`NotesCore`).
 - Apple frameworks only.

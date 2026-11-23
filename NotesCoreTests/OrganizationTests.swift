@@ -39,11 +39,36 @@ struct OrganizationTests {
             func fetch(pinned: Bool) throws -> [UUID] {
                 try context.fetch(FetchDescriptor<Note>(
                     predicate: scope.predicate(isPinned: pinned),
-                    sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+                    sortBy: scope.sortDescriptors
                 )).map(\.id)
             }
             #expect(try fetch(pinned: true) + fetch(pinned: false) == expected, "\(scope)")
         }
+    }
+
+    @Test func trashSortsNewestDeletedFirstWithoutSplittingPinnedNotes() throws {
+        let (library, context) = try makeLibrary()
+        let olderEdited = library.createNote(body: "Older edited", now: t0)
+        let newerEditedPinned = library.createNote(body: "Newer edited pinned", now: t0.addingTimeInterval(100))
+        newerEditedPinned.setPinned(true, now: t0.addingTimeInterval(100))
+        // Trash the pinned note first, then the older note later.
+        library.trash(newerEditedPinned, now: t0.addingTimeInterval(200))
+        library.trash(olderEdited, now: t0.addingTimeInterval(300))
+        try context.save()
+
+        let filtered = NoteFilter.apply(to: [olderEdited, newerEditedPinned], scope: .trash)
+        #expect(titles(filtered) == ["Older edited", "Newer edited pinned"])
+
+        let pinnedInTrash = try context.fetch(FetchDescriptor<Note>(
+            predicate: NoteScope.trash.predicate(isPinned: true),
+            sortBy: NoteScope.trash.sortDescriptors
+        ))
+        let unpinnedInTrash = try context.fetch(FetchDescriptor<Note>(
+            predicate: NoteScope.trash.predicate(isPinned: false),
+            sortBy: NoteScope.trash.sortDescriptors
+        ))
+        #expect(pinnedInTrash.isEmpty)
+        #expect(titles(unpinnedInTrash) == ["Older edited", "Newer edited pinned"])
     }
 
     @Test func aWidenedPredicateSelectsEveryLiveNote() throws {
@@ -178,6 +203,13 @@ struct OrganizationTests {
         #expect(NoteSearch.snippet(in: "one two", query: "two") == "one two")
     }
 
+    @Test func snippetStripsMarkdownAndCanSkipTheTitleLine() {
+        let body = "# **Budget** Plan\n- [ ] Check [quarterly report](https://example.com)"
+        #expect(NoteSearch.snippet(in: body, query: "report", skippingTitleLine: true) == "Check quarterly report")
+        #expect(NoteSearch.snippet(in: body, query: "budget", skippingTitleLine: true) == nil)
+        #expect(NoteSearch.snippet(in: body, query: "budget", skippingTitleLine: false) == "Budget Plan Check quarterly report")
+    }
+
     // MARK: Folder and tag management
 
     @Test func renamingAFolderTrimsAndRejectsEmptyNames() throws {
@@ -259,5 +291,58 @@ struct OrganizationTests {
         let remaining = try context.fetch(FetchDescriptor<Note>())
         #expect(remaining.count == 1)
         #expect(remaining.first === keep)
+    }
+
+    // MARK: Empty notes
+
+    @Test func noteIsEmptyRequiresBlankBodyAndNoAttachments() throws {
+        let (library, context) = try makeLibrary()
+        let blank = library.createNote(body: "", now: t0)
+        let whitespace = library.createNote(body: "   \n\t\n  ", now: t0)
+        let markdownOnly = library.createNote(body: "# ", now: t0)
+        let titled = library.createNote(body: "Hello", now: t0)
+        let attached = library.createNote(body: "", now: t0)
+        let file = Attachment(fileName: "photo.png", typeIdentifier: "public.png", data: Data([0x89]), now: t0)
+        context.insert(file)
+        file.note = attached
+        try context.save()
+
+        #expect(blank.isEmpty)
+        #expect(whitespace.isEmpty)
+        #expect(!markdownOnly.isEmpty)
+        #expect(!titled.isEmpty)
+        #expect(!attached.isEmpty)
+    }
+
+    @Test func untitledPredicateSelectsOnlyEmptyTitleNotesInScope() throws {
+        let (library, context) = try makeLibrary()
+        let work = try library.createFolder(named: "Work", now: t0)
+        let personal = try library.createFolder(named: "Personal", now: t0)
+
+        let emptyInWork = library.createNote(body: "", in: work, now: t0)
+        let whitespaceUnfiled = library.createNote(body: " \n ", now: t0)
+        let markdownOnlyInPersonal = library.createNote(body: "# ", in: personal, now: t0)
+        let titledInWork = library.createNote(body: "Sprint", in: work, now: t0)
+        let emptyTrashed = library.createNote(body: "", now: t0)
+        library.trash(emptyTrashed, now: t0)
+        try library.addTag(named: "swift", to: emptyInWork, now: t0)
+        try context.save()
+
+        let swiftTag = try #require(emptyInWork.tags?.first)
+        func fetchEmpty(_ scope: NoteScope) throws -> Set<UUID> {
+            let candidates = try context.fetch(FetchDescriptor<Note>(predicate: scope.untitledPredicate))
+            #expect(!candidates.contains { $0.id == titledInWork.id })
+            return Set(candidates.filter(\.isEmpty).map(\.id))
+        }
+
+        #expect(try fetchEmpty(.all) == [emptyInWork.id, whitespaceUnfiled.id])
+        #expect(try fetchEmpty(.unfiled) == [whitespaceUnfiled.id])
+        #expect(try fetchEmpty(.folder(work.id)) == [emptyInWork.id])
+        #expect(try fetchEmpty(.folder(personal.id)).isEmpty)
+        #expect(try fetchEmpty(.tag(swiftTag.id)) == [emptyInWork.id])
+        #expect(try fetchEmpty(.trash) == [emptyTrashed.id])
+        #expect(NoteScope.folder(personal.id).contains(markdownOnlyInPersonal))
+        #expect(!NoteScope.folder(work.id).contains(whitespaceUnfiled))
+        #expect(!NoteScope.all.contains(emptyTrashed))
     }
 }

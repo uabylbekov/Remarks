@@ -6,7 +6,7 @@ public enum NotesStore {
     public static let cloudKitContainerID = "iCloud.io.github.uabylbekov.notes"
 
     public static var schema: Schema {
-        Schema(versionedSchema: SchemaV2.self)
+        Schema(versionedSchema: NotesSchema.self)
     }
 
     /// - Parameters:

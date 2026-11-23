@@ -16,21 +16,36 @@ struct AttachmentPickers: ViewModifier {
     @State private var showsFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var errorMessage: String?
+    @State private var fileImportTask: Task<Void, Never>?
     #if os(iOS)
     @State private var showsCamera = false
     #endif
+
+    private var canAcceptAttachments: Bool {
+        !note.isDeleted && note.modelContext != nil && note.deletedAt == nil
+    }
 
     func body(content: Content) -> some View {
         content
             .onChange(of: commands.attachmentRequest) { _, source in
                 guard let source else { return }
                 commands.attachmentRequest = nil
+                guard canAcceptAttachments else { return }
                 request(source)
             }
             .onChange(of: commands.pastedFiles.count) {
+                guard !commands.pastedFiles.isEmpty else { return }
                 let files = commands.pastedFiles
                 commands.pastedFiles = []
+                guard canAcceptAttachments else { return }
                 files.forEach { add(data: $0.data, fileName: $0.fileName, type: $0.type) }
+            }
+            .onChange(of: commands.pastedFileURLs.count) {
+                guard !commands.pastedFileURLs.isEmpty else { return }
+                let urls = commands.pastedFileURLs
+                commands.pastedFileURLs = []
+                guard canAcceptAttachments else { return }
+                addFiles(urls)
             }
             .photosPicker(isPresented: $showsPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
             .task(id: photoItems) {
@@ -46,10 +61,19 @@ struct AttachmentPickers: ViewModifier {
                 }
             }
             .dropDestination(for: URL.self) { urls, _ in
+                guard canAcceptAttachments else { return false }
                 let files = urls.filter(\.isFileURL)
                 guard !files.isEmpty else { return false }
                 addFiles(files)
                 return true
+            }
+            .onChange(of: note.id) { _, _ in
+                fileImportTask?.cancel()
+                fileImportTask = nil
+            }
+            .onDisappear {
+                fileImportTask?.cancel()
+                fileImportTask = nil
             }
             #if os(iOS)
             .fullScreenCover(isPresented: $showsCamera) {
@@ -80,6 +104,7 @@ struct AttachmentPickers: ViewModifier {
     // MARK: Adding
 
     private func add(data: Data, fileName: String, type: UTType?) {
+        guard canAcceptAttachments else { return }
         do {
             let attachment = try AttachmentStore(context: context).add(
                 data: data,
@@ -114,22 +139,34 @@ struct AttachmentPickers: ViewModifier {
     }
 
     private func addFiles(_ urls: [URL]) {
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard canAcceptAttachments else { return }
+        let targetNoteID = note.id
+        fileImportTask?.cancel()
+        fileImportTask = Task {
+            for url in urls {
+                let outcome = await Task.detached(priority: .userInitiated) { () -> Result<(Data, String, UTType?), AttachmentError> in
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-            // Check the size before reading, so a huge file is refused without loading it into memory.
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-            if let size = values?.fileSize, size > AttachmentLimits.maxFileBytes * 2 {
-                errorMessage = AttachmentError.tooLarge.localizedDescription
-                continue
+                    // Check the size before reading, so a huge file is refused without loading it into memory.
+                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+                    if let size = values?.fileSize, size > AttachmentLimits.maxFileBytes * 2 {
+                        return .failure(.tooLarge)
+                    }
+                    guard let data = try? Data(contentsOf: url) else {
+                        return .failure(.unreadable)
+                    }
+                    let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension)
+                    return .success((data, url.lastPathComponent, type))
+                }.value
+                guard !Task.isCancelled, canAcceptAttachments, note.id == targetNoteID else { return }
+                switch outcome {
+                case .success(let (data, fileName, type)):
+                    add(data: data, fileName: fileName, type: type)
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                }
             }
-            guard let data = try? Data(contentsOf: url) else {
-                errorMessage = AttachmentError.unreadable.localizedDescription
-                continue
-            }
-            let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension)
-            add(data: data, fileName: url.lastPathComponent, type: type)
         }
     }
 }
@@ -153,12 +190,14 @@ private struct CameraPicker: UIViewControllerRepresentable {
         return picker
     }
 
-    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {
+        context.coordinator.parent = self
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        private let parent: CameraPicker
+        var parent: CameraPicker
 
         init(_ parent: CameraPicker) {
             self.parent = parent

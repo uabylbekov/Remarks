@@ -7,10 +7,8 @@ struct EditorViewport<Surface: View>: View {
     @ViewBuilder var surface: Surface
 
     var body: some View {
-        let viewport = GeometryReader { geometry in
-            surface
-                .frame(width: geometry.size.width, height: geometry.size.height)
-        }
+        let viewport = surface
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if os(iOS)
         // The Mac window already lays its scroll view out under the toolbar.
         viewport.ignoresSafeArea()

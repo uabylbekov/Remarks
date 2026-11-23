@@ -23,11 +23,17 @@ final class TableViewRegistry {
     private struct Placed {
         let host: Host
         var table: MarkdownTable
+        var appearanceRevision: Int
+        var isEditable: Bool
+        var isOuterEditorFocused: Bool
         var request: TableFocusRequest?
         var frame: CGRect
     }
 
     private weak var container: OverlayContainer?
+    #if canImport(UIKit)
+    private weak var parentViewController: UIViewController?
+    #endif
     private weak var preview: LivePreviewController?
     /// Where the text container starts inside the text view.
     private let origin: () -> CGPoint
@@ -36,6 +42,21 @@ final class TableViewRegistry {
     /// The latest request to put the caret in a table's cell, by table. It stays until the table has its view.
     private var requests: [UUID: TableFocusRequest] = [:]
     var onCellFocusChanged: ((Bool) -> Void)?
+    var isEditable: Bool = true {
+        didSet {
+            if oldValue != isEditable {
+                if !isEditable { focusedCell = nil }
+                scheduleUpdate()
+            }
+        }
+    }
+    var isOuterEditorFocused: Bool = false {
+        didSet {
+            if oldValue != isOuterEditorFocused, !placed.isEmpty {
+                scheduleUpdate()
+            }
+        }
+    }
     private var focusedCell: (id: UUID, bounds: CGRect)? {
         didSet {
             if (oldValue != nil) != (focusedCell != nil) { onCellFocusChanged?(focusedCell != nil) }
@@ -44,16 +65,27 @@ final class TableViewRegistry {
     private var viewportSize: CGSize = .zero
     private var requestCount = 0
 
+    #if canImport(UIKit)
+    init(container: OverlayContainer, parentViewController: UIViewController? = nil) {
+        self.container = container
+        self.parentViewController = parentViewController
+        self.origin = { [weak container] in
+            guard let view = container as? UITextView else { return .zero }
+            return CGPoint(x: view.textContainerInset.left, y: view.textContainerInset.top)
+        }
+    }
+    #else
     init(container: OverlayContainer) {
         self.container = container
         self.origin = { [weak container] in
-            #if canImport(UIKit)
-            guard let view = container as? UITextView else { return .zero }
-            return CGPoint(x: view.textContainerInset.left, y: view.textContainerInset.top)
-            #else
-            return (container as? NSTextView)?.textContainerOrigin ?? .zero
-            #endif
+            (container as? NSTextView)?.textContainerOrigin ?? .zero
         }
+    }
+    #endif
+
+    func teardown() {
+        resetTables()
+        preview = nil
     }
 
     func connect(to preview: LivePreviewController?, apply: @escaping (TextEdit) -> Void, placeCaret: @escaping (NSRange) -> Void) {
@@ -67,7 +99,7 @@ final class TableViewRegistry {
 
     /// Puts the caret in a cell of a table.
     private func focus(table index: Int, row: Int, column: Int) {
-        guard let id = preview?.tableID(at: index) else { return }
+        guard isEditable, let id = preview?.tableID(at: index) else { return }
         requestCount += 1
         requests[id] = TableFocusRequest(token: requestCount, row: row, column: column)
         update()
@@ -76,6 +108,7 @@ final class TableViewRegistry {
     /// The text view has just laid out. Tables are placed now, in the same pass as the text, so one never lags behind
     /// it when the text above it grows or shrinks, or when the table itself is removed.
     func layoutDidChange() {
+        guard !placed.isEmpty || preview?.hasTables == true else { return }
         let size = container?.bounds.size ?? .zero
         let viewportChanged = size != viewportSize
         viewportSize = size
@@ -131,6 +164,7 @@ final class TableViewRegistry {
     private func update() {
         guard let container, let preview else { return }
         let origin = origin()
+        let appearanceRevision = AppearanceModel.shared.revision
         var focusedFrameChanged = false
 
         var laidOut: Set<UUID> = []
@@ -139,32 +173,49 @@ final class TableViewRegistry {
             let id = item.id
             laidOut.insert(id)
             let request = requests[id]
-            let view = TableGridView(
-                table: item.table,
-                focusRequest: request,
-                onChange: { [weak preview] table in
-                    guard let preview, let index = preview.tableIndex(for: id) else { return }
-                    preview.replaceTable(at: index, with: table)
-                },
-                onDelete: { [weak preview] in
-                    guard let preview, let index = preview.tableIndex(for: id) else { return }
-                    preview.deleteTable(at: index)
-                },
-                onExit: { [weak preview] exit in
-                    guard let preview, let index = preview.tableIndex(for: id) else { return }
-                    preview.exitTable(at: index, toward: exit)
-                },
-                onFocusBounds: { [weak self] bounds in
-                    self?.focusBoundsChanged(id: id, bounds: bounds)
-                }
-            )
+
+            func makeView() -> TableGridView {
+                TableGridView(
+                    table: item.table,
+                    appearanceRevision: appearanceRevision,
+                    isEditable: isEditable,
+                    isOuterEditorFocused: isOuterEditorFocused,
+                    focusRequest: request,
+                    onChange: { [weak preview] table in
+                        guard let preview, let index = preview.tableIndex(for: id) else { return }
+                        preview.replaceTable(at: index, with: table)
+                    },
+                    onDelete: { [weak preview] in
+                        guard let preview, let index = preview.tableIndex(for: id) else { return }
+                        preview.deleteTable(at: index)
+                    },
+                    onExit: { [weak preview] exit in
+                        guard let preview, let index = preview.tableIndex(for: id) else { return }
+                        preview.exitTable(at: index, toward: exit)
+                    },
+                    onFocusBounds: { [weak self] bounds in
+                        self?.focusBoundsChanged(id: id, bounds: bounds)
+                    }
+                )
+            }
 
             if var current = placed[id] {
                 // The same view stays, so the cell being edited keeps its focus.
-                if current.table != item.table || current.request != request {
-                    setRootView(view, of: current.host)
+                let needsRootUpdate = current.table != item.table
+                    || current.appearanceRevision != appearanceRevision
+                    || current.isEditable != isEditable
+                    || current.isOuterEditorFocused != isOuterEditorFocused
+                    || (request != nil && current.request != request)
+                if needsRootUpdate {
+                    setRootView(makeView(), of: current.host)
                     current.table = item.table
-                    current.request = request
+                    current.appearanceRevision = appearanceRevision
+                    current.isEditable = isEditable
+                    current.isOuterEditorFocused = isOuterEditorFocused
+                    if request != nil {
+                        current.request = request
+                        requests[id] = nil
+                    }
                 }
                 if current.frame != frame {
                     if focusedCell?.id == id { focusedFrameChanged = true }
@@ -174,9 +225,18 @@ final class TableViewRegistry {
                 setHidden(false, of: current.host)
                 placed[id] = current
             } else {
-                let host = makeHost(view, in: container)
+                let host = makeHost(makeView(), in: container)
                 setFrame(frame, of: host)
-                placed[id] = Placed(host: host, table: item.table, request: request, frame: frame)
+                if request != nil { requests[id] = nil }
+                placed[id] = Placed(
+                    host: host,
+                    table: item.table,
+                    appearanceRevision: appearanceRevision,
+                    isEditable: isEditable,
+                    isOuterEditorFocused: isOuterEditorFocused,
+                    request: request,
+                    frame: frame
+                )
             }
         }
 
@@ -206,11 +266,15 @@ final class TableViewRegistry {
         host.sizingOptions = []
         host.view.backgroundColor = .clear
         // A hosting controller works best as a child of the screen's controller, so keyboard and focus follow it.
-        var responder: UIResponder? = container
-        while let next = responder?.next, !(responder is UIViewController) { responder = next }
-        if let parent = responder as? UIViewController { parent.addChild(host) }
+        var parent = parentViewController
+        if parent == nil {
+            var responder: UIResponder? = container
+            while let next = responder?.next, !(responder is UIViewController) { responder = next }
+            parent = responder as? UIViewController
+        }
+        if let parent { parent.addChild(host) }
         container.addSubview(host.view)
-        (responder as? UIViewController).map { host.didMove(toParent: $0) }
+        parent.map { host.didMove(toParent: $0) }
         return host
     }
 

@@ -110,4 +110,16 @@ struct MarkdownTableTests {
         #expect(table.alignments == [.none, .none, .right])
         #expect(MarkdownTable(parsing: table.markdown())?.alignments == [.none, .none, .right])
     }
+
+    @Test func emojiCellsRoundTripWithoutTruncation() {
+        let table = MarkdownTable(header: ["Item", "Icon"], alignments: [.none, .none], rows: [["Apple", "🍎🎉"], ["Banana", "🍌"]])
+        let parsed = MarkdownTable(parsing: table.markdown())
+        #expect(parsed == table)
+    }
+
+    @Test func initializerSanitizesPipesAndNewlines() {
+        let table = MarkdownTable(header: ["A|B"], alignments: [.none], rows: [["line1\nline2"]])
+        #expect(table.header == ["A\\|B"])
+        #expect(table.rows == [["line1 line2"]])
+    }
 }

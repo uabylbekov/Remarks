@@ -1,43 +1,31 @@
 import SwiftUI
 import NotesCore
 
-/// The app's settings. On the Mac they open in the Settings window with a tab for each area; on iPhone and iPad they
-/// are a short list that opens each area, the way the system Settings app does.
+/// The app's settings. On Mac they open as a single grouped form in the Settings window, matching Apple Notes;
+/// on iPhone and iPad they are a short list that pushes into each area, matching the system Settings app.
 struct SettingsView: View {
     var body: some View {
         #if os(macOS)
-        // The window follows the selected tab's natural size. The short tab is pinned to its content; the long one can
-        // shrink and scroll, and the window is kept on screen by the system.
-        TabView {
-            Tab("General", systemImage: "gearshape") {
-                GeneralSettingsView()
-                    .frame(minWidth: 440, idealWidth: 480, maxWidth: 640)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Tab("Appearance", systemImage: "textformat") {
-                AppearanceSettingsView()
-                    .frame(minWidth: 440, idealWidth: 480, maxWidth: 640, minHeight: 360)
-            }
+        Form {
+            AppearanceSettingsSections()
+            SearchSettingsSection()
+            AppearanceResetSection(title: "Reset Appearance to Defaults")
         }
+        .formStyle(.grouped)
+        .frame(minWidth: 420, idealWidth: 450, maxWidth: 520, minHeight: 560, idealHeight: 700)
         #else
         Form {
-            NavigationLink {
-                AppearanceSettingsView()
-            } label: {
-                Label("Appearance", systemImage: "textformat")
+            Section {
+                NavigationLink {
+                    AppearanceSettingsView()
+                } label: {
+                    Label("Appearance", systemImage: "textformat")
+                }
             }
             SearchSettingsSection()
         }
         .navigationTitle("Settings")
         #endif
-    }
-}
-
-/// Settings that are not about looks.
-struct GeneralSettingsView: View {
-    var body: some View {
-        Form { SearchSettingsSection() }
-            .formStyle(.grouped)
     }
 }
 
@@ -56,5 +44,9 @@ private struct SearchSettingsSection: View {
 }
 
 #Preview {
+    #if os(macOS)
+    SettingsView()
+    #else
     NavigationStack { SettingsView() }
+    #endif
 }

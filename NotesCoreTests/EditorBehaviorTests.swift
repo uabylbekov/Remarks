@@ -105,6 +105,32 @@ struct EditorBehaviorTests {
         #expect(MarkdownTable(parsing: "| First |\n| --- | --- |") == nil)
     }
 
+    @Test func tableRowFollowedByDashesIsNotASetextHeading() {
+        let document = MarkdownDocument("| A | B |\n---\n")
+        #expect(document.blocks.first?.kind == .table)
+    }
+
+    @Test func singleDashBelowParagraphDoesNotTriggerSetextHeading() {
+        let typing = MarkdownDocument("Paragraph\n-")
+        #expect(typing.blocks.count == 2)
+        #expect(typing.blocks.allSatisfy { $0.kind == .paragraph })
+
+        let confirmed = MarkdownDocument("Paragraph\n--")
+        guard case .heading(let level, _) = confirmed.blocks.first?.kind else {
+            Issue.record("Expected level-2 Setext heading for two dashes"); return
+        }
+        #expect(level == 2)
+    }
+
+    @Test func wrappingInlineStyleScopesToTheEditedLine() throws {
+        let source = "**first**\nsecond **word**\n**third**"
+        let word = (source as NSString).range(of: "word")
+        let caret = NSRange(location: word.location + 2, length: 0)
+        let edit = MarkdownEditing.edit(.bold, in: source, selection: caret)
+        let result = try #require(edit.transaction(in: source, selectionBefore: caret)).result
+        #expect(result == "**first**\nsecond word\n**third**")
+    }
+
 }
 
 /// Return inside bold, italic, strikethrough and inline code keeps each line's marks paired.

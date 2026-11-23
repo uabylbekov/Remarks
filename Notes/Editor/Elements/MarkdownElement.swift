@@ -6,8 +6,8 @@ struct ElementLine {
     /// The line in the stored text, with its line break. It is the same range as the paragraph being styled.
     let range: NSRange
     let block: MarkdownDocument.Block
-    /// The caret is on this line. Only a few elements look different for it (a rule, an attachment).
-    let isActive: Bool
+    /// Selection relative to this paragraph, or nil when it is elsewhere.
+    let selection: NSRange?
 }
 
 /// What the live preview offers an element while it styles a line.
@@ -19,8 +19,6 @@ protocol ElementServices: AnyObject {
     var linePadding: CGFloat { get }
     /// The syntax colors of a fenced block.
     func syntaxTokens(for block: CodeBlock) -> [SyntaxToken]
-    /// The caret is in, or the selection touches, a fenced block.
-    func isActive(_ block: CodeBlock) -> Bool
     /// The table as a model, or nil when it is not a complete one (no separator row) and is shown as text.
     func tableModel(for block: MarkdownDocument.Block) -> MarkdownTable?
     /// How a table shown as text is sized to fit the width.
@@ -40,14 +38,10 @@ protocol ElementServices: AnyObject {
 ///    draw something, put the fragment in the same file and return it from `textLayoutManager(_:textLayoutFragmentFor:in:)`.
 @MainActor
 protocol MarkdownElement {
-    /// Whether bold, italic, code and links are read on this element's lines.
-    var readsInline: Bool { get }
-
     /// Styles the paragraph that shows one line. Returns false when the line is left as it is.
     func style(_ paragraph: NSMutableAttributedString, line: ElementLine, services: ElementServices) -> Bool
 
-    /// The marks this element hides on a line, as positions in the stored text. Marks inside the text (bold, links) are
-    /// not here: `readsInline` covers them.
+    /// Source ranges replaced by rendered controls, such as checkboxes and attachments.
     func hiddenMarks(of block: MarkdownDocument.Block, line: NSRange, in source: NSString) -> [NSRange]
 
     /// The mark at the front of the line that Backspace takes away, turning the line back into plain text.
@@ -55,7 +49,6 @@ protocol MarkdownElement {
 }
 
 extension MarkdownElement {
-    var readsInline: Bool { true }
     func hiddenMarks(of block: MarkdownDocument.Block, line: NSRange, in source: NSString) -> [NSRange] { [] }
     func prefixMark(of block: MarkdownDocument.Block, in source: NSString) -> NSRange? { nil }
 }
@@ -68,13 +61,14 @@ enum MarkdownElements {
         switch kind {
         case .paragraph: ParagraphElement()
         case .heading: HeadingElement()
-        case .bullet: BulletElement()
+        case .bullet, .numbered: BulletElement()
         case .checklist: ChecklistElement()
         case .quote: QuoteElement()
         case .rule: RuleElement()
         case .attachment: AttachmentElement()
         case .code: CodeBlockElement()
         case .table: TableElement()
+        case .math: MathElement()
         }
     }
 }

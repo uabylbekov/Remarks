@@ -21,12 +21,14 @@ extension MarkdownCommand {
         case .inlineCode: String(localized: "Inline Code")
         case .codeBlock: String(localized: "Code Block")
         case .link: String(localized: "Link")
+        case .math: String(localized: "Equation")
+        case .diagram: String(localized: "Diagram")
         }
     }
 
     var systemImage: String {
         switch self {
-        case .heading: "h.square"
+        case .heading: "textformat"
         case .bold: "bold"
         case .italic: "italic"
         case .strikethrough: "strikethrough"
@@ -38,6 +40,8 @@ extension MarkdownCommand {
         case .inlineCode: "chevron.left.forwardslash.chevron.right"
         case .codeBlock: "curlybraces"
         case .link: "link"
+        case .math: "function"
+        case .diagram: "point.3.connected.trianglepath.dotted"
         }
     }
 }
@@ -49,7 +53,7 @@ enum EditorCommandCatalog {
     /// out of sight.
     static let keyboardBar: [MarkdownCommand] = [
         .heading, .bold, .italic, .checklist, .bulletList, .numberedList, .quote, .table,
-        .codeBlock, .inlineCode, .link, .strikethrough,
+        .codeBlock, .inlineCode, .link, .strikethrough, .math, .diagram,
     ]
 }
 
@@ -74,25 +78,29 @@ extension AttachmentSource {
     static var available: [AttachmentSource] {
         #if os(iOS)
         let hasCamera = UIImagePickerController.isSourceTypeAvailable(.camera)
-        #else
-        let hasCamera = false
-        #endif
         return [.photoLibrary] + (hasCamera ? [.camera] : []) + [.file]
+        #else
+        return [.photoLibrary, .file]
+        #endif
     }
 }
 
-/// A button that runs one formatting command.
+/// A button that runs one formatting command and reflects whether that formatting is active at the caret.
 struct CommandButton: View {
     let command: MarkdownCommand
+    var isActive: Bool = false
     let perform: (MarkdownCommand) -> Void
 
-    init(_ command: MarkdownCommand, perform: @escaping (MarkdownCommand) -> Void) {
+    init(_ command: MarkdownCommand, isActive: Bool = false, perform: @escaping (MarkdownCommand) -> Void) {
         self.command = command
+        self.isActive = isActive
         self.perform = perform
     }
 
     var body: some View {
         Button(command.title, systemImage: command.systemImage) { perform(command) }
+            .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+            .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
@@ -112,31 +120,41 @@ struct AttachMenu: View {
 #if os(macOS)
 /// The Mac has no keyboard bar, so the formatting commands live in the window toolbar.
 struct FormattingToolbarContent: ToolbarContent {
-    let commands: EditorCommands
-    /// Off while no note is open, so the toolbar is there but does nothing, as in Apple Notes.
+    let commands: EditorCommands?
+    /// Off while no note is open or a note is in Recently Deleted, so the toolbar is there but inactive, as in Apple Notes.
     var isEnabled = true
+
+    private var isDisabled: Bool {
+        !isEnabled || commands == nil || commands?.isEditingTableCell == true || commands?.isReadOnly == true
+    }
+
+    private func isActive(_ command: MarkdownCommand) -> Bool {
+        !isDisabled && commands?.activeCommands.contains(command) == true
+    }
 
     var body: some ToolbarContent {
         // The most used first: the system folds the last buttons into the » menu when the window is narrow.
         ToolbarItemGroup(placement: .secondaryAction) {
             Group {
-                CommandButton(.heading, perform: commands.perform)
-                CommandButton(.bold, perform: commands.perform)
-                CommandButton(.italic, perform: commands.perform)
-                CommandButton(.checklist, perform: commands.perform)
-                CommandButton(.table, perform: commands.perform)
-                AttachMenu(attach: commands.attach)
-                CommandButton(.bulletList, perform: commands.perform)
-                CommandButton(.numberedList, perform: commands.perform)
+                CommandButton(.heading, isActive: isActive(.heading)) { commands?.perform($0) }
+                CommandButton(.bold, isActive: isActive(.bold)) { commands?.perform($0) }
+                CommandButton(.italic, isActive: isActive(.italic)) { commands?.perform($0) }
+                CommandButton(.checklist, isActive: isActive(.checklist)) { commands?.perform($0) }
+                CommandButton(.table, isActive: isActive(.table)) { commands?.perform($0) }
+                AttachMenu { commands?.attach(from: $0) }
+                CommandButton(.bulletList, isActive: isActive(.bulletList)) { commands?.perform($0) }
+                CommandButton(.numberedList, isActive: isActive(.numberedList)) { commands?.perform($0) }
                 Menu("More", systemImage: "ellipsis") {
-                    CommandButton(.strikethrough, perform: commands.perform)
-                    CommandButton(.quote, perform: commands.perform)
-                    CommandButton(.inlineCode, perform: commands.perform)
-                    CommandButton(.codeBlock, perform: commands.perform)
-                    CommandButton(.link, perform: commands.perform)
+                    CommandButton(.strikethrough, isActive: isActive(.strikethrough)) { commands?.perform($0) }
+                    CommandButton(.quote, isActive: isActive(.quote)) { commands?.perform($0) }
+                    CommandButton(.inlineCode, isActive: isActive(.inlineCode)) { commands?.perform($0) }
+                    CommandButton(.codeBlock, isActive: isActive(.codeBlock)) { commands?.perform($0) }
+                    CommandButton(.math, isActive: isActive(.math)) { commands?.perform($0) }
+                    CommandButton(.diagram, isActive: isActive(.diagram)) { commands?.perform($0) }
+                    CommandButton(.link, isActive: isActive(.link)) { commands?.perform($0) }
                 }
             }
-            .disabled(!isEnabled)
+            .disabled(isDisabled)
         }
     }
 }
@@ -158,14 +176,26 @@ struct KeyboardFormattingBar: View {
     let attach: (AttachmentSource) -> Void
     let dismiss: () -> Void
 
+    private var formattingDisabled: Bool {
+        commands?.isEditingTableCell == true || commands?.isReadOnly == true
+    }
+
     var body: some View {
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
                         ForEach(EditorCommandCatalog.keyboardBar, id: \.self) { command in
-                            CommandButton(command, perform: perform)
+                            let active = !formattingDisabled && commands?.activeCommands.contains(command) == true
+                            CommandButton(command, isActive: active, perform: perform)
                                 .touchTarget()
+                                .background {
+                                    if active {
+                                        Circle()
+                                            .fill(.tint.opacity(0.16))
+                                            .padding(4)
+                                    }
+                                }
                             if command == .table {
                                 AttachMenu(attach: attach)
                                     .touchTarget()
@@ -176,6 +206,8 @@ struct KeyboardFormattingBar: View {
                 }
                 .scrollIndicators(.hidden)
                 .glassEffect(.regular, in: .capsule)
+                // While a table cell owns input or a note is read-only, disable formatting while keeping Hide Keyboard active.
+                .disabled(formattingDisabled)
 
                 Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down", action: dismiss)
                     .touchTarget()
@@ -189,8 +221,6 @@ struct KeyboardFormattingBar: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, 8)
         .padding(.bottom, 8)
-        // While a table cell owns input, a command would reach the document, not the cell.
-        .disabled(commands?.isEditingTableCell == true)
     }
 }
 #endif

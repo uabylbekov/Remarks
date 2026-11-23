@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Version 2 of the synced schema (Spec 01, Spec 07): version 1 plus attachments.
+/// The synced schema (Spec 01, Spec 07): notes, folders, tags, and attachments.
 ///
 /// CloudKit rules applied: no unique constraints, every property has a default or is optional, every
 /// relationship is optional with an inverse, and no `.deny` delete rule. After release the schema is
@@ -9,8 +9,8 @@ import SwiftData
 ///
 /// Models are nested in the schema version so a later version can keep a frozen copy of these (with a migration plan).
 /// Use the top-level typealiases (`Note`, `Folder`, `Tag`, `Attachment`) everywhere else.
-public enum SchemaV2: VersionedSchema {
-    public static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
+public enum NotesSchema: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
 
     public static var models: [any PersistentModel.Type] {
         [Note.self, Folder.self, Tag.self, Attachment.self]
@@ -50,6 +50,12 @@ public enum SchemaV2: VersionedSchema {
             guard newBody != body else { return }
             applyBody(newBody)
             modifiedAt = now
+        }
+
+        /// Whether the note has no content yet: blank body and no attachments.
+        public var isEmpty: Bool {
+            body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (attachments?.isEmpty ?? true)
         }
 
         public func setPinned(_ pinned: Bool, now: Date = .now) {
@@ -97,7 +103,7 @@ public enum SchemaV2: VersionedSchema {
     @Model
     public final class Tag {
         public var id: UUID = UUID()
-        /// Stored as typed. Compared case- and diacritic-insensitively by `TagService` (not yet written).
+        /// Stored as typed. Compared case- and diacritic-insensitively by `Library`.
         public var name: String = ""
         public var createdAt: Date = Date.now
 
@@ -147,7 +153,7 @@ public enum SchemaV2: VersionedSchema {
     }
 }
 
-public typealias Note = SchemaV2.Note
-public typealias Folder = SchemaV2.Folder
-public typealias Tag = SchemaV2.Tag
-public typealias Attachment = SchemaV2.Attachment
+public typealias Note = NotesSchema.Note
+public typealias Folder = NotesSchema.Folder
+public typealias Tag = NotesSchema.Tag
+public typealias Attachment = NotesSchema.Attachment

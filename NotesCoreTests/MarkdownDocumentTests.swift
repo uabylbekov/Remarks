@@ -171,7 +171,7 @@ struct MarkdownDocumentUpdateTests {
             "😀 title\r\n- [x] 👩🏽‍💻\r\n| A |\r\n| --- |\r\n",
             "a\rb\r# c\r", "a\u{2028}b\u{2029}c"
         ]
-        let replacements = ["", "x", "\n", "\r", "| X |\n", "```\n", "😀", "- [ ] "]
+        let replacements = ["", "x", "\n", "\r", "| X |\n", "```\n", "😀", "- [ ] ", "$$\n", "$$x$$\n"]
         for text in texts {
             let boundaries = text.indices.map { NSRange($0..<$0, in: text).location } + [(text as NSString).length]
             for (index, location) in boundaries.enumerated() {

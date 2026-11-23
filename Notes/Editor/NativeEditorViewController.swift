@@ -51,11 +51,14 @@ final class NativeEditorViewController: UIViewController {
         updateKeyboardScrollSpace(overlap: max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY))
     }
 
+    static let endOfNoteSpace: CGFloat = 120
+
     /// Add actual scrollable space, without changing the document or feeding keyboard overlap back into the safe area.
     func updateKeyboardScrollSpace(overlap: CGFloat) {
         let systemBottom = max(0, textView.adjustedContentInset.bottom - textView.contentInset.bottom)
         let keyboardInset = max(0, overlap - systemBottom)
-        let bottomInset = keyboardInset + (keyboardInset > 0 ? 24 : 0)
+        // Spare room below the last line, so the end of a note can be scrolled up and edited away from the screen edge.
+        let bottomInset = keyboardInset + Self.endOfNoteSpace
         if textView.contentInset.bottom != bottomInset {
             textView.contentInset.bottom = bottomInset
             textView.verticalScrollIndicatorInsets.bottom = keyboardInset

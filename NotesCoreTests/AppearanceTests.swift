@@ -27,6 +27,27 @@ struct AppearanceTests {
         #expect(fixed.lineSpacing == AppearanceSettings.lineSpacingRange.lowerBound)
     }
 
+    @Test func lineHeightMapsCleanlyToLineSpacingAndClamps() {
+        var settings = AppearanceSettings()
+        #expect(settings.lineHeight == AppearanceSettings.defaultLineHeight)
+
+        settings.lineHeight = 1.4
+        #expect(settings.lineSpacing == 0.4)
+        #expect(settings.lineHeight == 1.4)
+
+        settings.lineHeight = AppearanceSettings.defaultLineHeight
+        #expect(settings.lineSpacing == 0.15)
+        #expect(settings == AppearanceSettings())
+
+        settings.lineHeight = 0.5
+        #expect(settings.lineHeight == AppearanceSettings.lineHeightRange.lowerBound)
+        #expect(settings.lineSpacing == AppearanceSettings.lineSpacingRange.lowerBound)
+
+        settings.lineHeight = 2.5
+        #expect(settings.lineHeight == AppearanceSettings.lineHeightRange.upperBound)
+        #expect(settings.lineSpacing == AppearanceSettings.lineSpacingRange.upperBound)
+    }
+
     @Test func unknownThemeFallsBackToStandard() {
         var settings = AppearanceSettings()
         settings.codeThemeID = "from-a-newer-version"
@@ -117,6 +138,17 @@ struct AppearanceCompatibilityTests {
         #expect(settings.lineSpacing == 0.3)
         #expect(settings.codeThemeID == "solarized")
         #expect(settings.codeLigatures)
+    }
+
+    /// A newer app version may save a font design this version does not know. That one choice falls back to its
+    /// default; the rest of the settings still load, so a save never wipes them.
+    @Test func anUnknownFontDesignKeepsTheOtherSettings() throws {
+        let newer = #"{"textFont":{"design":{"_0":"handwritten"}},"codeFont":{"design":{"_0":"monospaced"}},"sizeScale":1.4,"lineSpacing":0.3,"codeThemeID":"github"}"#
+        let settings = try JSONDecoder().decode(AppearanceSettings.self, from: Data(newer.utf8))
+        #expect(settings.textFont == AppearanceSettings().textFont)
+        #expect(settings.sizeScale == 1.4)
+        #expect(settings.lineSpacing == 0.3)
+        #expect(settings.codeThemeID == "github")
     }
 
     @Test func ligaturesRoundTrip() throws {

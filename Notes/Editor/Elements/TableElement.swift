@@ -5,8 +5,6 @@ import NotesCore
 /// Its first source row reserves the grid’s metrics. Incomplete tables remain editable text in the code font.
 /// Neither depends on the caret.
 struct TableElement: MarkdownElement {
-    var readsInline: Bool { false }
-
     func style(_ paragraph: NSMutableAttributedString, line: ElementLine, services: ElementServices) -> Bool {
         if let table = services.tableModel(for: line.block) {
             styleGridRow(paragraph, isFirst: line.range.location == line.block.range.location, table: table, services: services)
@@ -64,11 +62,7 @@ struct TableElement: MarkdownElement {
         style.firstLineHeadIndent = LivePreviewController.codeInset
         style.headIndent = LivePreviewController.codeInset
         style.tailIndent = -LivePreviewController.codeInset
-        // The card's padding and margin sit above the first row and below the last, as around a block of code.
-        style.paragraphSpacingBefore = range.location == layout.run.location
-            ? LivePreviewController.cardMargin + LivePreviewController.cardPadding : 0
-        style.paragraphSpacing = NSMaxRange(range) == NSMaxRange(layout.run)
-            ? LivePreviewController.cardPadding + LivePreviewController.cardMargin : 0
+        // Top and bottom margins come from `CodeBlockFragment` via `blockMarkerKey`, matching code blocks.
         style.lineBreakMode = .byClipping
         paragraph.addAttributes([
             .font: isHeader ? EditorTheme.traited(base, bold: true) : base,
@@ -82,6 +76,6 @@ struct TableElement: MarkdownElement {
             paragraph.addAttribute(.foregroundColor, value: EditorTheme.dimColor, range: NSRange(location: index, length: 1))
         }
         // Marks keep the code font's width here, so the columns stay lined up.
-        if !isSeparator { _ = InlineStyler.style(paragraph, hidesMarkers: false, shrinksMarkers: false) }
+        if !isSeparator { _ = InlineStyler.style(paragraph, selection: NSRange(location: 0, length: paragraph.length)) }
     }
 }

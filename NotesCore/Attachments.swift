@@ -38,7 +38,7 @@ public struct AttachmentLine: Equatable, Sendable {
     public let label: String
 
     private static let expression = try? NSRegularExpression(
-        pattern: #"^\s*(!?)\[([^\]]*)\]\(attachment://([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)\s*$"#
+        pattern: #"^[ \t]*(!?)\[([^\]\r\n]*)\]\(attachment://([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)[ \t]*$"#
     )
     private static let anywhere = try? NSRegularExpression(
         pattern: #"attachment://([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"#
@@ -46,12 +46,16 @@ public struct AttachmentLine: Equatable, Sendable {
 
     /// - Returns: nil unless the whole line is an attachment reference.
     public static func parse(_ line: String) -> AttachmentLine? {
-        let range = NSRange(line.startIndex..., in: line)
-        guard let match = expression?.firstMatch(in: line, range: range),
-              let id = UUID(uuidString: (line as NSString).substring(with: match.range(at: 3)))
+        var trimmed = line
+        while trimmed.last?.isNewline == true { trimmed.removeLast() }
+        guard !trimmed.contains(where: \.isNewline) else { return nil }
+        let ns = trimmed as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = expression?.firstMatch(in: trimmed, range: range),
+              let id = UUID(uuidString: ns.substring(with: match.range(at: 3)))
         else { return nil }
-        let marker = (line as NSString).substring(with: match.range(at: 1))
-        return AttachmentLine(id: id, isImage: marker == "!", label: (line as NSString).substring(with: match.range(at: 2)))
+        let marker = ns.substring(with: match.range(at: 1))
+        return AttachmentLine(id: id, isImage: marker == "!", label: ns.substring(with: match.range(at: 2)))
     }
 
     /// Every attachment id that the text refers to, anywhere in it.
@@ -62,9 +66,10 @@ public struct AttachmentLine: Equatable, Sendable {
         return Set(matches.compactMap { UUID(uuidString: text.substring(with: $0.range(at: 1))) })
     }
 
-    /// The Markdown for an attachment. Brackets are removed from the name, because they would end the link text.
+    /// The Markdown for an attachment. Brackets and line breaks are removed from the name so the reference stays on one line.
     public static func markdown(id: UUID, name: String, isImage: Bool) -> String {
-        let clean = name.replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
+        let singleLine = name.split(whereSeparator: \.isNewline).joined(separator: " ")
+        let clean = singleLine.replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
         return "\(isImage ? "!" : "")[\(clean)](attachment://\(id.uuidString))"
     }
 }
@@ -93,7 +98,17 @@ public enum ImagePreparation {
         let isGIF = UTType(typeIdentifier)?.conforms(to: .gif) == true
         let longest = max(width, height)
         if longest <= AttachmentLimits.maxImagePixels || isGIF {
-            return PreparedImage(data: data, typeIdentifier: typeIdentifier, pixelWidth: width, pixelHeight: height)
+            // EXIF orientations 5–8 rotate 90°/270° and transpose display width and height.
+            let orientation = (properties[kCGImagePropertyOrientation] as? UInt32)
+                ?? (properties[kCGImagePropertyOrientation] as? Int).map(UInt32.init)
+                ?? 1
+            let isTransposed = (5...8).contains(orientation)
+            return PreparedImage(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                pixelWidth: isTransposed ? height : width,
+                pixelHeight: isTransposed ? width : height
+            )
         }
 
         let options: [CFString: Any] = [
@@ -147,7 +162,10 @@ public struct AttachmentStore {
         var type = typeIdentifier
         var width = 0
         var height = 0
-        if isImage, let prepared = ImagePreparation.prepare(data, typeIdentifier: typeIdentifier) {
+        if isImage {
+            guard let prepared = ImagePreparation.prepare(data, typeIdentifier: typeIdentifier) else {
+                throw AttachmentError.unreadable
+            }
             stored = prepared.data
             type = prepared.typeIdentifier
             width = prepared.pixelWidth
@@ -179,7 +197,7 @@ public struct AttachmentStore {
 
     // MARK: Cleanup
 
-    /// Attachments of live notes that no text refers to and that are older than the grace period.
+    /// Attachments of live notes that no text refers to, plus orphaned attachments with no note, older than the grace period.
     public func unreferenced(now: Date = .now) throws -> [Attachment] {
         let cutoff = now.addingTimeInterval(-AttachmentLimits.unreferencedGracePeriod)
         let notes = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil }))
@@ -189,6 +207,10 @@ public struct AttachmentStore {
             let referenced = AttachmentLine.references(in: note.body)
             result += attachments.filter { !referenced.contains($0.id) && $0.createdAt <= cutoff }
         }
+        let orphans = try context.fetch(FetchDescriptor<Attachment>(predicate: #Predicate {
+            $0.note == nil && $0.createdAt <= cutoff
+        }))
+        result += orphans
         return result
     }
 
@@ -206,13 +228,19 @@ extension MarkdownEditing {
     /// Puts `markdown` on a line of its own at the selection (replacing the selection), with the caret on the line after.
     public static func insertBlock(_ markdown: String, in text: String, selection: NSRange) -> TextEdit {
         let source = text as NSString
-        let start = min(selection.location, source.length)
-        let end = min(NSMaxRange(selection), source.length)
-        let startsLine = start == 0 || source.character(at: start - 1) == 10
+        let start = min(max(selection.location, 0), source.length)
+        let length = min(max(selection.length, 0), source.length - start)
+        let startsLine: Bool
+        if start == 0 {
+            startsLine = true
+        } else {
+            let previous = source.character(at: start - 1)
+            startsLine = previous == 10 || previous == 13 || previous == 0x2029
+        }
         let replacement = (startsLine ? "" : "\n") + markdown + "\n"
         let caret = start + (replacement as NSString).length
         return TextEdit(
-            range: NSRange(location: start, length: end - start),
+            range: NSRange(location: start, length: length),
             replacement: replacement,
             selection: NSRange(location: caret, length: 0)
         )
@@ -237,15 +265,22 @@ public struct ExportedNote: Sendable {
 }
 
 public enum NoteExporter {
+    private static let markdownPathAllowed: CharacterSet = {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "()#%")
+        return allowed
+    }()
+
     /// The stored body is never changed. The returned copy uses relative links, so any Markdown app can open it.
     public static func export(_ note: Note) -> ExportedNote {
         var markdown = note.body
+        let referenced = AttachmentLine.references(in: markdown)
         var files: [ExportedFile] = []
-        for attachment in note.attachments ?? [] {
+        for attachment in note.attachments ?? [] where referenced.contains(attachment.id) {
             guard let data = attachment.data else { continue }
             let fileName = "\(attachment.id.uuidString.prefix(8))-\(safeName(attachment.fileName.isEmpty ? "Attachment" : attachment.fileName))"
             let path = "attachments/\(fileName)"
-            let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+            let encoded = path.addingPercentEncoding(withAllowedCharacters: markdownPathAllowed) ?? path
             markdown = markdown.replacingOccurrences(of: "attachment://\(attachment.id.uuidString)", with: encoded, options: .caseInsensitive)
             files.append(ExportedFile(path: path, data: data))
         }
@@ -256,6 +291,7 @@ public enum NoteExporter {
     private static func safeName(_ name: String) -> String {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|")
         let cleaned = name.components(separatedBy: forbidden).joined(separator: "-").trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? "Note" : cleaned
+        if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return "Note" }
+        return cleaned
     }
 }

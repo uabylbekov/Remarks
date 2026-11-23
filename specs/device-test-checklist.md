@@ -19,7 +19,7 @@ This is the riskiest change. It decides what happens when a note changes while i
 | # | Do this | Expect |
 |---|---|---|
 | 2.1 | Open a note on the Mac and don't type. Edit the same note on the iPhone | The Mac editor updates to the new text |
-| 2.2 | Open a note on the Mac and type a few words (don't wait). On the iPhone, add a line to the same note | Your typed words stay. The line added on the iPhone is not kept |
+| 2.2 | Open a note on the Mac and type a few words (don't wait). On the iPhone, add a line and an attachment to the same note | Your typed words stay. If both sides changed from the editor's last known text, the incoming version is preserved as a separate note with working attachments |
 | 2.3 | Type, then immediately switch to another note | Nothing you typed is lost |
 
 ## 3. Siri and Shortcuts (Spec 06)

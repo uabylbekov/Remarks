@@ -250,4 +250,43 @@ struct ChecklistToggleTests {
         let edit = MarkdownEditing.toggleChecklist(in: "- [ ] a", atLine: 0, keepingSelection: NSRange(location: 5, length: 0))
         #expect(edit?.selection == NSRange(location: 5, length: 0))
     }
+
+    @Test func emptyBracketToggleShiftsSelectionAfterBrackets() {
+        let edit = MarkdownEditing.toggleChecklist(in: "- [] hello", atLine: 0, keepingSelection: NSRange(location: 6, length: 0))
+        #expect(edit?.replacement == "x")
+        #expect(edit?.selection == NSRange(location: 7, length: 0))
+    }
+
+    @Test func bulletLinkStartingWithBracketsIsNotToggledAsChecklist() {
+        #expect(toggled("- [x](https://example.com)", line: 0) == nil)
+    }
+
+    @Test func hugeNumberedListDoesNotCrashOrOverflow() {
+        let huge = "99999999999999999999. item"
+        let edit = MarkdownEditing.returnKeyEdit(in: huge, selection: NSRange(location: huge.utf16.count, length: 0))
+        #expect(edit == nil)
+
+        let maxInt = "\(Int.max). item"
+        let maxEdit = MarkdownEditing.returnKeyEdit(in: maxInt, selection: NSRange(location: maxInt.utf16.count, length: 0))
+        #expect(maxEdit?.replacement == "\n\(Int.max). ")
+    }
+
+    @Test func surrogatePairBeforeUnderscoreStillAllowsItalic() {
+        let spans = InlineScanner.spans(in: "😀_italic_")
+        #expect(spans.count == 1)
+        #expect(spans.first?.kind == .italic)
+    }
+
+    @Test func linkOverlappingCodeSpanIsNotParsedAsLink() {
+        let spans = InlineScanner.spans(in: "[click](https://x/`code`)")
+        #expect(spans.allSatisfy { $0.kind != .link })
+        #expect(spans.contains { $0.kind == .code })
+    }
+
+    @Test func returnInsideBoldTrimsSplitWhitespace() {
+        let text = "**hello world**"
+        let edit = MarkdownEditing.returnKeyEdit(in: text, selection: NSRange(location: 7, length: 0))
+        let result = edit.map { (text as NSString).replacingCharacters(in: $0.range, with: $0.replacement) }
+        #expect(result == "**hello**\n**world**")
+    }
 }

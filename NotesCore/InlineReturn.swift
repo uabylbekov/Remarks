@@ -16,7 +16,7 @@ extension MarkdownEditing {
     static func inlineReturnEdit(in text: String, selection: NSRange, next: String) -> TextEdit? {
         guard selection.length == 0 else { return nil }
         let source = text as NSString
-        guard selection.location <= source.length else { return nil }
+        guard selection.location >= 0, selection.location <= source.length else { return nil }
 
         var contentsEnd = 0
         source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: selection.location, length: 0))
@@ -25,18 +25,28 @@ extension MarkdownEditing {
         let line = source.substring(with: NSRange(location: lineStart, length: contentsEnd - lineStart))
         let caret = selection.location - lineStart
 
-        let spans = InlineScanner.spans(in: line).filter {
+        let allSpans = InlineScanner.spans(in: line)
+        let spans = allSpans.filter {
             splittableKinds.contains($0.kind) && $0.content.location <= caret && caret <= NSMaxRange($0.content)
         }
         let lineText = line as NSString
         guard !spans.isEmpty else {
             // Formatting switched on and nothing typed yet (`**|**`) is not a span. Return cancels it, instead of leaving a
-            // lone mark on each line.
+            // lone mark on each line, unless the markers are escaped, adjacent to longer runs, or part of existing spans.
             for marks in ["***", "**", "~~", "*", "_", "`"] {
                 let length = (marks as NSString).length
                 guard caret >= length, caret + length <= lineText.length,
                       lineText.substring(with: NSRange(location: caret - length, length: length)) == marks,
                       lineText.substring(with: NSRange(location: caret, length: length)) == marks else { continue }
+                let unit = (marks as NSString).character(at: 0)
+                if caret - length > 0, lineText.character(at: caret - length - 1) == unit { continue }
+                if caret + length < lineText.length, lineText.character(at: caret + length) == unit { continue }
+                var backslashes = 0
+                var probe = caret - length
+                while probe > 0, lineText.character(at: probe - 1) == 92 { backslashes += 1; probe -= 1 }
+                if !backslashes.isMultiple(of: 2) { continue }
+                let pair = NSRange(location: caret - length, length: 2 * length)
+                if allSpans.contains(where: { NSIntersectionRange($0.range, pair).length > 0 }) { continue }
                 let replacement = "\n" + next
                 return TextEdit(range: NSRange(location: selection.location - length, length: 2 * length), replacement: replacement,
                                 selection: NSRange(location: selection.location - length + (replacement as NSString).length, length: 0))
@@ -70,8 +80,20 @@ extension MarkdownEditing {
         }
         // Spans that end and begin at different places are left to the plain line break rather than guessed at.
         guard spans.allSatisfy({ $0.content.location < caret && caret < NSMaxRange($0.content) }) else { return nil }
+        var splitStart = caret
+        var splitEnd = caret
+        if let inner = outerToInner.last, outerToInner.contains(where: { $0.kind != .code }) {
+            // Emphasis and strikethrough markers must hug non-whitespace characters on both halves.
+            while splitStart > inner.content.location, [32, 9].contains(lineText.character(at: splitStart - 1)) {
+                splitStart -= 1
+            }
+            while splitEnd < NSMaxRange(inner.content), [32, 9].contains(lineText.character(at: splitEnd)) {
+                splitEnd += 1
+            }
+            guard splitStart > inner.content.location, splitEnd < NSMaxRange(inner.content) else { return nil }
+        }
         let replacement = closers + "\n" + next + openers
-        return TextEdit(range: NSRange(location: selection.location, length: 0), replacement: replacement,
-                        selection: NSRange(location: selection.location + (replacement as NSString).length, length: 0))
+        return TextEdit(range: NSRange(location: lineStart + splitStart, length: splitEnd - splitStart), replacement: replacement,
+                        selection: NSRange(location: lineStart + splitStart + (replacement as NSString).length, length: 0))
     }
 }

@@ -1,5 +1,7 @@
 import SwiftUI
+import SwiftData
 import ImageIO
+import QuickLookThumbnailing
 import NotesCore
 import UniformTypeIdentifiers
 
@@ -27,16 +29,39 @@ struct AttachmentDisplay {
     let fileName: String
     let byteCount: Int
     let pixelSize: CGSize
-    /// A screen-sized copy of an image. Nil while the data has not arrived (sync) or for files.
+    /// A decoded image or document thumbnail. Nil until available, or for unsupported file types.
     let image: CGImage?
     let hasData: Bool
 }
 
-/// Looks attachments up for the open note and keeps decoded images, so drawing a line never decodes anything.
+/// Looks attachments up for the open note and keeps decoded images, so drawing a line never touches SwiftData or
+/// decodes on the main thread.
 @MainActor
 final class AttachmentCatalog {
+    private struct SnapshotEntry {
+        let isImage: Bool
+        let fileName: String
+        let byteCount: Int
+        let pixelSize: CGSize
+        let hasData: Bool
+    }
+
     private let note: () -> Note
-    private var images: [UUID: CGImage] = [:]
+    private let images: NSCache<NSUUID, CGImage> = {
+        let cache = NSCache<NSUUID, CGImage>()
+        cache.countLimit = 40
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
+    private var snapshot: [UUID: SnapshotEntry] = [:]
+    private var snapshotNoteID: UUID?
+    private var snapshotSignature: Int?
+    private var inFlight: Set<UUID> = []
+    /// Attachments whose image payload failed to decode; cleared if new data arrives so we never retry in a loop.
+    private var failedIDs: Set<UUID> = []
+    nonisolated(unsafe) private var decodeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Called on the main actor when a background thumbnail decode finishes, so the editor redraws the image.
+    var onImageDecoded: ((UUID) -> Void)?
     /// The longest side of the cached copy. Enough for a wide text column on a Retina display.
     private static let thumbnailPixels = 1600
 
@@ -44,47 +69,165 @@ final class AttachmentCatalog {
         self.note = note
     }
 
+    deinit {
+        for task in decodeTasks.values { task.cancel() }
+    }
+
+    /// Rebuilds the lightweight attachment metadata snapshot from SwiftData. Call outside drawing (on load or update).
+    func refreshSnapshot() {
+        let current = note()
+        guard !current.isDeleted, current.modelContext != nil else {
+            reset()
+            return
+        }
+        if snapshotNoteID != current.id {
+            reset()
+            snapshotNoteID = current.id
+        }
+        var next: [UUID: SnapshotEntry] = [:]
+        for attachment in current.attachments ?? [] {
+            let entry = SnapshotEntry(
+                isImage: AttachmentStore.isImage(attachment),
+                fileName: attachment.fileName,
+                byteCount: attachment.byteCount,
+                pixelSize: CGSize(width: attachment.pixelWidth, height: attachment.pixelHeight),
+                hasData: attachment.data != nil
+            )
+            if entry.hasData, snapshot[attachment.id]?.hasData == false {
+                failedIDs.remove(attachment.id)
+            }
+            next[attachment.id] = entry
+        }
+        let removedIDs = Set(snapshot.keys).subtracting(next.keys)
+        for id in removedIDs {
+            images.removeObject(forKey: id as NSUUID)
+            decodeTasks.removeValue(forKey: id)?.cancel()
+            inFlight.remove(id)
+            failedIDs.remove(id)
+        }
+        snapshot = next
+        snapshotSignature = signature
+    }
+
+    func reset() {
+        for task in decodeTasks.values { task.cancel() }
+        decodeTasks.removeAll()
+        inFlight.removeAll()
+        failedIDs.removeAll()
+        images.removeAllObjects()
+        snapshot.removeAll()
+        snapshotNoteID = nil
+        snapshotSignature = nil
+    }
+
     func display(for id: UUID) -> AttachmentDisplay? {
-        guard let attachment = note().attachments?.first(where: { $0.id == id }) else { return nil }
-        let isImage = AttachmentStore.isImage(attachment)
-        var image = images[id]
-        if isImage, image == nil, let data = attachment.data {
-            image = Self.decode(data)
-            images[id] = image
+        if snapshotSignature == nil { refreshSnapshot() }
+        guard let entry = snapshot[id] else { return nil }
+        let cached = images.object(forKey: id as NSUUID)
+        if cached == nil, entry.hasData, !inFlight.contains(id), !failedIDs.contains(id) {
+            scheduleDecode(for: id)
         }
         return AttachmentDisplay(
             id: id,
-            isImage: isImage,
-            fileName: attachment.fileName,
-            byteCount: attachment.byteCount,
-            pixelSize: CGSize(width: attachment.pixelWidth, height: attachment.pixelHeight),
-            image: image,
-            hasData: attachment.data != nil
+            isImage: entry.isImage,
+            fileName: entry.fileName,
+            byteCount: entry.byteCount,
+            pixelSize: entry.pixelSize,
+            image: cached,
+            hasData: entry.hasData
         )
     }
 
+    private func scheduleDecode(for id: UUID) {
+        guard let attachment = attachment(with: id), let data = attachment.data else { return }
+        let isImage = AttachmentStore.isImage(attachment)
+        let fileName = attachment.fileName
+        let typeIdentifier = attachment.typeIdentifier
+        // Archives have no useful page preview; keep their native document symbol.
+        if !isImage, UTType(typeIdentifier)?.conforms(to: .archive) == true {
+            failedIDs.insert(id)
+            return
+        }
+        inFlight.insert(id)
+        let maxPixels = Self.thumbnailPixels
+        decodeTasks[id] = Task { [weak self] in
+            let decoded: CGImage?
+            if isImage {
+                decoded = await Task.detached(priority: .userInitiated) {
+                    Self.decode(data, maxPixels: maxPixels)
+                }.value
+            } else {
+                decoded = await DocumentThumbnails.generate(id: id, fileName: fileName, data: data)
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.inFlight.remove(id)
+            self.decodeTasks.removeValue(forKey: id)
+            guard self.snapshot[id] != nil else { return }
+            guard let decoded else {
+                self.failedIDs.insert(id)
+                return
+            }
+            let cost = decoded.width * decoded.height * 4
+            self.images.setObject(decoded, forKey: id as NSUUID, cost: cost)
+            self.onImageDecoded?(id)
+        }
+    }
+
     func attachment(with id: UUID) -> NotesCore.Attachment? {
-        note().attachments?.first { $0.id == id }
+        let current = note()
+        guard !current.isDeleted, current.modelContext != nil else { return nil }
+        return current.attachments?.first { $0.id == id }
     }
 
     /// Changes when attachments are added, removed, or their data arrives, so the editor knows to redraw.
     var signature: Int {
+        let current = note()
+        guard !current.isDeleted, current.modelContext != nil else { return 0 }
         var hasher = Hasher()
-        for attachment in note().attachments ?? [] {
+        for attachment in (current.attachments ?? []).sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
             hasher.combine(attachment.id)
             hasher.combine(attachment.data != nil)
+            hasher.combine(attachment.byteCount)
+            hasher.combine(attachment.fileName)
         }
         return hasher.finalize()
     }
 
-    private static func decode(_ data: Data) -> CGImage? {
+    private nonisolated static func decode(_ data: Data, maxPixels: Int) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: thumbnailPixels,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+}
+
+/// Uses the system's document preview providers, without accepting generic file-icon representations.
+@MainActor
+enum DocumentThumbnails {
+    static func generate(id: UUID, fileName: String, data: Data) async -> CGImage? {
+        guard !Task.isCancelled,
+              let url = await AttachmentFiles.temporaryURLAsync(id: id, fileName: fileName, data: data),
+              !Task.isCancelled else { return nil }
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url, size: CGSize(width: 56, height: 64), scale: 3,
+            representationTypes: .thumbnail
+        )
+        request.iconMode = false
+        do {
+            let representation = try await withTaskCancellationHandler {
+                try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            } onCancel: {
+                QLThumbnailGenerator.shared.cancel(request)
+            }
+            guard !Task.isCancelled else { return nil }
+            return representation.cgImage
+        } catch {
+            // Unsupported files retain the document symbol; a thumbnail failure does not prevent opening.
+            return nil
+        }
     }
 }
 
@@ -98,7 +241,10 @@ final class AttachmentFragment: NSTextLayoutFragment {
     weak var controller: LivePreviewController?
 
     private static let cornerRadius: CGFloat = 10
-    static let chipHeight: CGFloat = 44
+    @MainActor
+    static var chipHeight: CGFloat {
+        max(64, ceil(EditorTheme.proseFont.pointSize * 2.6))
+    }
 
     private var paragraph: NSAttributedString? { (textElement as? NSTextParagraph)?.attributedString }
 
@@ -137,22 +283,33 @@ final class AttachmentFragment: NSTextLayoutFragment {
         visibleRect(in: contentRect(at: layoutFragmentFrame.origin))
     }
 
+    @MainActor
     static func displaySize(in area: CGSize, display: AttachmentDisplay?) -> CGSize {
-        if let display, display.isImage, let image = display.image {
-            let scale = min(area.width / CGFloat(image.width), area.height / CGFloat(image.height))
-            return CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        if let display, display.isImage {
+            let sourceSize: CGSize
+            if let image = display.image {
+                sourceSize = CGSize(width: CGFloat(image.width), height: CGFloat(image.height))
+            } else if display.pixelSize.width > 0, display.pixelSize.height > 0 {
+                sourceSize = display.pixelSize
+            } else {
+                sourceSize = .zero
+            }
+            if sourceSize.width > 0, sourceSize.height > 0, area.width > 0, area.height > 0 {
+                let scale = min(area.width / sourceSize.width, area.height / sourceSize.height)
+                return CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+            }
         }
         return CGSize(width: min(area.width, 340), height: min(area.height, Self.chipHeight))
     }
 
-    private func visibleRect(in area: CGRect) -> CGRect {
-        let display = attachmentID.flatMap { controller?.attachmentDisplay(for: $0) }
-        return CGRect(origin: area.origin, size: Self.displaySize(in: area.size, display: display))
+    private func visibleRect(in area: CGRect, display: AttachmentDisplay? = nil) -> CGRect {
+        let resolved = display ?? attachmentID.flatMap { controller?.attachmentDisplay(for: $0) }
+        return CGRect(origin: area.origin, size: Self.displaySize(in: area.size, display: resolved))
     }
 
     override var renderingSurfaceBounds: CGRect {
         super.renderingSurfaceBounds.union(
-            CGRect(x: -layoutFragmentFrame.minX, y: 0, width: containerWidth, height: layoutFragmentFrame.height)
+            CGRect(x: -layoutFragmentFrame.minX - 2, y: -2, width: containerWidth + 4, height: layoutFragmentFrame.height + 4)
         )
     }
 
@@ -161,23 +318,33 @@ final class AttachmentFragment: NSTextLayoutFragment {
         guard let id = attachmentID else { return }
         let area = contentRect(at: point)
         let display = controller?.attachmentDisplay(for: id)
+        let rect = visibleRect(in: area, display: display)
 
         context.saveGState()
-        defer { context.restoreGState() }
-
         if let display, display.isImage, let image = display.image {
-            drawImage(image, in: area, context: context)
+            drawImage(image, in: rect, context: context)
         } else {
-            drawChip(display, in: area, context: context)
+            drawChip(display, in: rect, context: context)
+        }
+        context.restoreGState()
+
+        if controller?.isAttachmentSelected(for: textElement) == true {
+            context.saveGState()
+            context.setStrokeColor(EditorTheme.accentColor.cgColor)
+            context.setLineWidth(2)
+            let ring = CGPath(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil)
+            context.addPath(ring)
+            context.strokePath()
+            context.restoreGState()
         }
     }
 
     // MARK: Image
 
-    private func drawImage(_ image: CGImage, in area: CGRect, context: CGContext) {
-        let rect = visibleRect(in: area)
-
-        context.addPath(CGPath(roundedRect: rect, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
+    private func drawImage(_ image: CGImage, in rect: CGRect, cornerRadius: CGFloat = AttachmentFragment.cornerRadius, context: CGContext) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil))
         context.clip()
         // Text layout draws with y growing downward, and CGContext draws images upright for y growing upward.
         context.translateBy(x: rect.minX, y: rect.maxY)
@@ -187,8 +354,7 @@ final class AttachmentFragment: NSTextLayoutFragment {
 
     // MARK: Chip (files, and images that have not arrived yet)
 
-    private func drawChip(_ display: AttachmentDisplay?, in area: CGRect, context: CGContext) {
-        let chip = visibleRect(in: area)
+    private func drawChip(_ display: AttachmentDisplay?, in chip: CGRect, context: CGContext) {
         context.setFillColor(EditorTheme.codeBackground.cgColor)
         context.addPath(CGPath(roundedRect: chip, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
         context.fillPath()
@@ -203,7 +369,7 @@ final class AttachmentFragment: NSTextLayoutFragment {
                 symbol = "icloud.and.arrow.down"
             } else {
                 detail = ByteCountFormatter.string(fromByteCount: Int64(display.byteCount), countStyle: .file)
-                symbol = Self.symbol(for: display)
+                symbol = display.isImage ? "photo" : "doc"
             }
         } else {
             title = String(localized: "Missing attachment")
@@ -211,34 +377,44 @@ final class AttachmentFragment: NSTextLayoutFragment {
             symbol = "exclamationmark.triangle"
         }
 
-        let iconSide: CGFloat = 22
-        let icon = CGRect(x: chip.minX + 12, y: chip.midY - iconSide / 2, width: iconSide, height: iconSide)
+        let proseSize = EditorTheme.proseFont.pointSize
+        let titleSize = min(20, max(13, proseSize * 0.88))
+        let detailSize = min(16, max(11, proseSize * 0.74))
+        let titleFont = EditorFont.systemFont(ofSize: titleSize, weight: .medium)
+        let detailFont = EditorFont.systemFont(ofSize: detailSize)
+        let titleHeight = ceil(titleFont.ascender - titleFont.descender + titleFont.leading)
+        let detailHeight = ceil(detailFont.ascender - detailFont.descender + detailFont.leading)
+
+        let iconHeight = min(56, max(0, chip.height - 8))
+        let icon = CGRect(x: chip.minX + 12, y: chip.midY - iconHeight / 2, width: iconHeight * 0.85, height: iconHeight)
         let textX = icon.maxX + 10
         let textWidth = max(0, chip.maxX - textX - 12)
 
-        AttachmentDrawing.draw(symbol: symbol, in: icon, color: EditorTheme.accentColor, context: context)
-        let titleFont = EditorFont.systemFont(ofSize: 14, weight: .medium)
-        let detailFont = EditorFont.systemFont(ofSize: 12)
+        if let display, !display.isImage, let thumbnail = display.image {
+            let scale = min(icon.width / CGFloat(thumbnail.width), icon.height / CGFloat(thumbnail.height))
+            let size = CGSize(width: CGFloat(thumbnail.width) * scale, height: CGFloat(thumbnail.height) * scale)
+            let preview = CGRect(x: icon.midX - size.width / 2, y: icon.midY - size.height / 2,
+                                 width: size.width, height: size.height)
+            drawImage(thumbnail, in: preview, cornerRadius: 3, context: context)
+        } else if let display, !display.isImage, display.hasData {
+            AttachmentDrawing.drawFileIcon(fileName: display.fileName, in: icon, context: context)
+        } else {
+            AttachmentDrawing.draw(symbol: symbol, in: icon, color: EditorColor.secondaryText, context: context)
+        }
         if detail.isEmpty {
             AttachmentDrawing.draw(text: title, font: titleFont, color: EditorColor.primaryText,
-                                   in: CGRect(x: textX, y: chip.midY - 9, width: textWidth, height: 18), context: context)
+                                   in: CGRect(x: textX, y: chip.midY - titleHeight / 2, width: textWidth, height: titleHeight), context: context)
         } else {
+            let gap: CGFloat = 1
+            let totalHeight = titleHeight + gap + detailHeight
+            let topY = chip.midY - totalHeight / 2
             AttachmentDrawing.draw(text: title, font: titleFont, color: EditorColor.primaryText,
-                                   in: CGRect(x: textX, y: chip.minY + 5, width: textWidth, height: 18), context: context)
+                                   in: CGRect(x: textX, y: topY, width: textWidth, height: titleHeight), context: context)
             AttachmentDrawing.draw(text: detail, font: detailFont, color: EditorColor.secondaryText,
-                                   in: CGRect(x: textX, y: chip.minY + 23, width: textWidth, height: 16), context: context)
+                                   in: CGRect(x: textX, y: topY + titleHeight + gap, width: textWidth, height: detailHeight), context: context)
         }
     }
 
-    private static func symbol(for display: AttachmentDisplay) -> String {
-        if display.isImage { return "photo" }
-        let type = UTType(filenameExtension: (display.fileName as NSString).pathExtension)
-        if type?.conforms(to: .pdf) == true { return "doc.richtext" }
-        if type?.conforms(to: .audiovisualContent) == true { return "play.rectangle" }
-        if type?.conforms(to: .archive) == true { return "doc.zipper" }
-        if type?.conforms(to: .text) == true { return "doc.text" }
-        return "doc"
-    }
 }
 
 // MARK: - Drawing helpers
@@ -246,16 +422,27 @@ final class AttachmentFragment: NSTextLayoutFragment {
 /// Draws SF Symbols and text into the text layout's `CGContext`, on both platforms.
 @MainActor
 enum AttachmentDrawing {
+    #if canImport(UIKit)
+    private static let blankImage: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+    #else
+    private static let blankImage: NSImage = NSImage(size: CGSize(width: 1, height: 1))
+    #endif
+
     /// A transparent native glyph reserves stable width for a custom-drawn preview element.
     static func placeholder(size: CGSize) -> NSTextAttachment {
         let attachment = NSTextAttachment(data: nil, ofType: nil)
         attachment.bounds = CGRect(origin: .zero, size: size)
-        #if canImport(UIKit)
-        attachment.image = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
-        #else
-        attachment.image = NSImage(size: CGSize(width: 1, height: 1))
-        #endif
+        attachment.image = blankImage
         return attachment
+    }
+
+    /// Native monochrome symbols adapt to light and dark appearances, with no badge fill.
+    static func drawFileIcon(fileName: String, in rect: CGRect, context: CGContext) {
+        let fileExtension = (fileName as NSString).pathExtension.lowercased()
+        let isArchive = UTType(filenameExtension: fileExtension)?.conforms(to: .archive) == true
+            || ["zip", "rar", "7z", "tar", "gz"].contains(fileExtension)
+        draw(symbol: isArchive ? "doc.zipper" : "doc", in: rect,
+             color: .primaryText, context: context)
     }
 
     static func draw(symbol: String, in rect: CGRect, color: EditorColor, context: CGContext) {
@@ -312,9 +499,25 @@ enum AttachmentDrawing {
 enum AttachmentFiles {
     static func temporaryURL(for attachment: NotesCore.Attachment) -> URL? {
         guard let data = attachment.data else { return nil }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.id.uuidString, isDirectory: true)
-        let url = directory.appendingPathComponent(attachment.fileName.isEmpty ? "Attachment" : attachment.fileName)
+        return writeTemporaryFile(id: attachment.id, fileName: attachment.fileName, data: data)
+    }
+
+    /// Writes the attachment payload off the main actor so Quick Look opening never stalls UI rendering on large files.
+    static func temporaryURLAsync(id: UUID, fileName: String, data: Data) async -> URL? {
+        await Task.detached(priority: .userInitiated) {
+            writeTemporaryFile(id: id, fileName: fileName, data: data)
+        }.value
+    }
+
+    private nonisolated static func writeTemporaryFile(id: UUID, fileName: String, data: Data) -> URL? {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
+        let rawName = (fileName as NSString).lastPathComponent
+        let safeName = (rawName.isEmpty || rawName == "." || rawName == "..") ? "Attachment" : rawName
+        let url = directory.appendingPathComponent(safeName)
         do {
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size == data.count {
+                return url
+            }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             return url

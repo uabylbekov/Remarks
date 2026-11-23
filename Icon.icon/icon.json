@@ -1,11 +1,18 @@
 {
-  "fill" : {
-    "solid" : "extended-gray:1.00000,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : "system-light"
+    },
+    {
+      "appearance" : "dark",
+      "value" : "system-dark"
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -15,7 +22,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -27,7 +34,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -40,6 +47,7 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "value" : {
@@ -55,7 +63,7 @@
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  257,
+                  256,
                   -227.79000000000008
                 ]
               }
@@ -63,6 +71,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -72,7 +81,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -84,7 +93,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -97,13 +106,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  188,
+                  190,
                   -227.78999999999996
                 ]
               }
@@ -111,6 +121,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -120,7 +131,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -132,7 +143,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -145,13 +156,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  125,
+                  127,
                   -227.79000000000002
                 ]
               }
@@ -159,6 +171,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -168,7 +181,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -180,7 +193,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -193,13 +206,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  58,
+                  62,
                   -227.78999999999996
                 ]
               }
@@ -207,6 +221,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -216,7 +231,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -228,7 +243,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -241,13 +256,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -2.2100000000000364,
+                  -0.21000000000003638,
                   -227.78999999999996
                 ]
               }
@@ -255,6 +271,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -264,7 +281,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -276,7 +293,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -289,13 +306,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -185,
+                  -189,
                   -227.78999999999996
                 ]
               }
@@ -303,6 +321,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -312,7 +331,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -324,7 +343,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -337,13 +356,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -254.18499999999995,
+                  -256.18499999999995,
                   -227.78999999999996
                 ]
               }
@@ -351,6 +371,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -360,7 +381,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -372,7 +393,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -385,13 +406,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -126.625,
+                  -127.625,
                   -227.78999999999996
                 ]
               }
@@ -399,6 +421,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -408,7 +431,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -420,7 +443,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -433,6 +456,7 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
@@ -447,6 +471,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -456,7 +481,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -468,7 +493,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -481,13 +506,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -454,
+                  -451,
                   -227.78999999999996
                 ]
               }
@@ -495,6 +521,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -504,7 +531,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -516,7 +543,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -529,13 +556,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -387,
+                  -385,
                   -227.78999999999996
                 ]
               }
@@ -543,6 +571,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -552,7 +581,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -564,7 +593,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -577,13 +606,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  -68,
+                  -66,
                   -227.78999999999996
                 ]
               }
@@ -591,6 +621,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -600,7 +631,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -612,7 +643,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -625,13 +656,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  319,
+                  318,
                   -227.78999999999996
                 ]
               }
@@ -639,6 +671,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -648,13 +681,13 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             }
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -667,13 +700,14 @@
           ],
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  452,
+                  451,
                   -227.79000000000008
                 ]
               }
@@ -681,6 +715,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -690,7 +725,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -702,7 +737,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -716,13 +751,14 @@
           "hidden" : false,
           "image-name" : "white_dot_clean_transparent.png",
           "name" : "white_dot_clean_transparent",
+          "opacity" : 1,
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
                 "scale" : 0.04,
                 "translation-in-points" : [
-                  386,
+                  383,
                   -227.79000000000008
                 ]
               }
@@ -748,7 +784,11 @@
     {
       "layers" : [
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
+            {
+              "value" : "none"
+            },
             {
               "appearance" : "tinted",
               "value" : {
@@ -767,6 +807,12 @@
           ],
           "image-name" : "Vivid Blue Gradient Rectangle.png",
           "name" : "Vivid Blue Gradient Rectangle",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
@@ -776,6 +822,7 @@
           }
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -785,7 +832,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -797,7 +844,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -812,11 +859,11 @@
           "name" : "apple_notes_single_stroke",
           "opacity-specializations" : [
             {
-              "value" : 0.85
+              "value" : 1
             },
             {
               "appearance" : "dark",
-              "value" : 0.7
+              "value" : 1
             }
           ],
           "position-specializations" : [
@@ -842,6 +889,7 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
@@ -851,7 +899,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
@@ -863,7 +911,7 @@
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -878,11 +926,11 @@
           "name" : "apple_notes_single_stroke",
           "opacity-specializations" : [
             {
-              "value" : 0.85
+              "value" : 1
             },
             {
               "appearance" : "dark",
-              "value" : 0.7
+              "value" : 1
             }
           ],
           "position-specializations" : [
@@ -908,28 +956,29 @@
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
-                "solid" : "extended-gray:0.75000,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:0.50000,1.00000"
+                "solid" : "extended-gray:0.75000,1.00000"
               }
             },
             {
               "appearance" : "tinted",
               "value" : {
-                "solid" : "extended-gray:0.75000,1.00000"
+                "solid" : "extended-gray:0.50000,1.00000"
               }
             }
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -944,11 +993,11 @@
           "name" : "rounded_double_asterisk",
           "opacity-specializations" : [
             {
-              "value" : 0.85
+              "value" : 1
             },
             {
               "appearance" : "dark",
-              "value" : 0.7
+              "value" : 1
             },
             {
               "appearance" : "tinted",
@@ -959,38 +1008,39 @@
             {
               "idiom" : "square",
               "value" : {
-                "scale" : 0.4,
+                "scale" : 0.3,
                 "translation-in-points" : [
-                  -126.625,
-                  167
+                  -220.33999999999997,
+                  102
                 ]
               }
             }
           ]
         },
         {
+          "blend-mode" : "normal",
           "fill-specializations" : [
             {
               "value" : {
-                "solid" : "display-p3:0.76660,0.76660,0.76660,1.00000"
+                "solid" : "extended-gray:0.25000,1.00000"
               }
             },
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "display-p3:0.43994,0.43994,0.43994,1.00000"
+                "solid" : "extended-gray:0.75000,1.00000"
               }
             },
             {
               "appearance" : "tinted",
               "value" : {
-                "solid" : "extended-gray:0.75000,1.00000"
+                "solid" : "extended-gray:0.50000,1.00000"
               }
             }
           ],
           "glass-specializations" : [
             {
-              "value" : true
+              "value" : false
             },
             {
               "appearance" : "dark",
@@ -1005,11 +1055,11 @@
           "name" : "Rounded Gray Hash Symbol",
           "opacity-specializations" : [
             {
-              "value" : 0.85
+              "value" : 1
             },
             {
               "appearance" : "dark",
-              "value" : 0.7
+              "value" : 1
             },
             {
               "appearance" : "tinted",
@@ -1022,8 +1072,8 @@
               "value" : {
                 "scale" : 0.25,
                 "translation-in-points" : [
-                  -156.75,
-                  -99.83999999999997
+                  -224.75,
+                  -115.5
                 ]
               }
             }

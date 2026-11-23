@@ -25,7 +25,7 @@ public struct TextEdit: Equatable, Sendable {
 public enum MarkdownCommand: CaseIterable, Sendable {
     case codeBlock, inlineCode, bold, italic, strikethrough, heading
     case bulletList, numberedList, checklist, quote, link
-    case table
+    case table, math, diagram
 }
 
 /// Pure text logic for the formatting controls, so it can be tested without any UI.
@@ -36,6 +36,8 @@ public enum MarkdownEditing {
         let selection = clamped(selection, length: source.length)
 
         switch command {
+        case .math: return richBlock("$$", body: "E = mc^2", in: text, selection: selection)
+        case .diagram: return richBlock("```mermaid", body: "flowchart LR\n    A[Start] --> B[End]", in: text, selection: selection)
         case .inlineCode: return wrap("`", in: source, selection: selection)
         case .bold: return wrap("**", in: source, selection: selection)
         case .italic: return wrap("_", in: source, selection: selection)
@@ -49,6 +51,16 @@ public enum MarkdownEditing {
         case .link: return link(in: source, selection: selection)
         case .table: return table(in: source, selection: selection)
         }
+    }
+
+    private static func richBlock(_ fence: String, body: String, in text: String, selection: NSRange) -> TextEdit {
+        let source = text as NSString
+        let content = selection.length > 0 ? source.substring(with: selection) : body
+        let closing = fence == "$$" ? "$$" : "```"
+        var edit = insertBlock(fence + "\n" + content + "\n" + closing, in: text, selection: selection)
+        let prefix = edit.replacement.hasPrefix("\n") ? 1 : 0
+        edit.selection = NSRange(location: edit.range.location + prefix + fence.utf16.count + 1, length: content.utf16.count)
+        return edit
     }
 
     // MARK: Inline wrapping
@@ -66,14 +78,28 @@ public enum MarkdownEditing {
             default: false
             }
         }
-        if let span = InlineScanner.spans(in: source as String)
-            .filter({ relevant($0.kind) && selection.location >= $0.content.location && NSMaxRange(selection) <= NSMaxRange($0.content) })
+        let lineRange = source.lineRange(for: selection)
+        let localSelection = NSRange(location: selection.location - lineRange.location, length: selection.length)
+        if let span = InlineScanner.spans(in: source.substring(with: lineRange))
+            .filter({ relevant($0.kind) && localSelection.location >= $0.content.location && NSMaxRange(localSelection) <= NSMaxRange($0.content) })
             .min(by: { $0.range.length < $1.range.length }) {
+            let spanRange = NSRange(location: lineRange.location + span.range.location, length: span.range.length)
+            let spanContent = NSRange(location: lineRange.location + span.content.location, length: span.content.length)
             let remaining = span.kind == .boldItalic ? (marker == "**" ? "*" : "**") : ""
-            let content = source.substring(with: span.content)
-            return TextEdit(range: span.range, replacement: remaining + content + remaining,
-                            selection: NSRange(location: span.range.location + remaining.utf16.count + selection.location - span.content.location,
-                                               length: selection.length))
+            var content = source.substring(with: spanContent)
+            var leadingPadTrimmed = 0
+            // CommonMark pads inline code spans that start or end with a backtick; strip that single space pair on untoggle.
+            if span.kind == .code, content.count >= 2, content.hasPrefix(" "), content.hasSuffix(" "),
+               content.contains(where: { $0 != " " }) {
+                content = String(content.dropFirst().dropLast())
+                leadingPadTrimmed = 1
+            }
+            let newContentLength = (content as NSString).length
+            let relativeStart = max(0, min(selection.location - spanContent.location - leadingPadTrimmed, newContentLength))
+            let relativeEnd = max(relativeStart, min(NSMaxRange(selection) - spanContent.location - leadingPadTrimmed, newContentLength))
+            return TextEdit(range: spanRange, replacement: remaining + content + remaining,
+                            selection: NSRange(location: spanRange.location + remaining.utf16.count + relativeStart,
+                                               length: relativeEnd - relativeStart))
         }
 
         let hasMarkerBefore = selection.location >= markerLength
@@ -118,34 +144,40 @@ public enum MarkdownEditing {
 
     // MARK: Code block
 
+    /// Returns the line's content without its terminator, plus the terminator itself (LF, CRLF, CR, etc.).
+    private static func splitTerminator(of range: NSRange, in source: NSString) -> (content: String, terminator: String) {
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: range)
+        let content = source.substring(with: NSRange(location: range.location, length: max(0, contentsEnd - range.location)))
+        let terminator = source.substring(with: NSRange(location: contentsEnd, length: max(0, NSMaxRange(range) - contentsEnd)))
+        return (content, terminator)
+    }
+
     /// Inserts a fenced block with the caret at the start of its first body line.
     private static func codeBlock(in source: NSString, selection: NSRange) -> TextEdit {
         if selection.length > 0 {
             let lines = source.lineRange(for: selection)
-            var content = source.substring(with: lines)
-            let hadNewline = content.hasSuffix("\n")
-            if hadNewline { content.removeLast() }
+            let (content, terminator) = splitTerminator(of: lines, in: source)
             return TextEdit(
                 range: lines,
-                replacement: "```\n" + content + "\n```" + (hadNewline ? "\n" : ""),
+                replacement: "```\n" + content + "\n```" + terminator,
                 selection: NSRange(location: lines.location + 4, length: 0)
             )
         }
 
         let line = source.lineRange(for: selection)
-        let content = source.substring(with: line)
+        let (content, terminator) = splitTerminator(of: line, in: source)
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // A blank line becomes the block, keeping its own newline.
-            let hadNewline = content.hasSuffix("\n")
             return TextEdit(
                 range: line,
-                replacement: "```\n\n```" + (hadNewline ? "\n" : ""),
+                replacement: "```\n\n```" + terminator,
                 selection: NSRange(location: line.location + 4, length: 0)
             )
         }
 
         // A line with text: put the block after it.
-        let lineEnd = NSMaxRange(line) - (content.hasSuffix("\n") ? 1 : 0)
+        let lineEnd = line.location + (content as NSString).length
         return TextEdit(
             range: NSRange(location: lineEnd, length: 0),
             replacement: "\n```\n\n```",
@@ -158,14 +190,23 @@ public enum MarkdownEditing {
     /// to match them.
     public static func setCodeLanguage(_ language: String, inBlockAt offset: Int, in text: String) -> TextEdit? {
         let source = text as NSString
-        guard let block = CodeBlockScanner.scan(text).first(where: { NSLocationInRange(offset, $0.whole) || offset == NSMaxRange($0.whole) }) else { return nil }
+        let blocks = CodeBlockScanner.scan(text)
+        guard let block = blocks.first(where: { NSLocationInRange(offset, $0.whole) })
+            ?? blocks.first(where: { offset == NSMaxRange($0.whole) }) else { return nil }
         var contentsEnd = 0
         source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: block.open)
         let opener = source.substring(with: NSRange(location: block.open.location, length: contentsEnd - block.open.location))
         let leading = opener.prefix { $0 == " " || $0 == "\t" }
         let rest = opener.dropFirst(leading.count)
-        let fence = rest.prefix { $0 == rest.first }
-        let name = language.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fenceChar = rest.first
+        let fence = rest.prefix { $0 == fenceChar }
+        // Info strings cannot contain line breaks, and backtick fences cannot contain backticks in their info string.
+        let sanitized = language
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        let name = fenceChar == "`" ? sanitized.replacingOccurrences(of: "`", with: "") : sanitized
         let line = String(leading) + String(fence) + name
         let range = NSRange(location: block.open.location, length: contentsEnd - block.open.location)
         let delta = (line as NSString).length - range.length
@@ -176,7 +217,7 @@ public enum MarkdownEditing {
 
     // MARK: Heading
 
-    private static let headingPrefix = try? NSRegularExpression(pattern: #"^(#{1,6})[ \t]"#)
+    private static let headingPrefix = try? NSRegularExpression(pattern: #"^(#{1,6})[ \t]+"#)
 
     /// Cycles the current line through #, ##, ###, and back to plain text.
     private static func heading(in source: NSString, selection: NSRange) -> TextEdit {
@@ -191,12 +232,22 @@ public enum MarkdownEditing {
             newPrefix = level < 3 ? String(repeating: "#", count: level + 1) + " " : ""
         }
 
-        let delta = (newPrefix as NSString).length - oldPrefixLength
-        let caret = max(line.location + (newPrefix as NSString).length, selection.location + delta)
+        let newPrefixLength = (newPrefix as NSString).length
+        let delta = newPrefixLength - oldPrefixLength
+        let newLength = source.length + delta
+        let minCaret = line.location + newPrefixLength
+        let newStart = min(max(minCaret, selection.location + delta), newLength)
+        let newSelection: NSRange
+        if selection.length == 0 {
+            newSelection = NSRange(location: newStart, length: 0)
+        } else {
+            let newEnd = min(max(newStart, NSMaxRange(selection) + delta), newLength)
+            newSelection = NSRange(location: newStart, length: newEnd - newStart)
+        }
         return TextEdit(
             range: NSRange(location: line.location, length: oldPrefixLength),
             replacement: newPrefix,
-            selection: NSRange(location: caret, length: selection.length)
+            selection: newSelection
         )
     }
 
@@ -214,64 +265,85 @@ public enum MarkdownEditing {
             }
         }
 
-        /// Matches the leading mark of this style.
-        var pattern: String {
+        private static let bulletRegex = try? NSRegularExpression(pattern: #"^([ \t]*)[-*+][ \t]+(?!\[[ xX]?\](?:[ \t]+|$))"#)
+        private static let numberedRegex = try? NSRegularExpression(pattern: #"^([ \t]*)\d+[.)][ \t]+"#)
+        private static let checklistRegex = try? NSRegularExpression(pattern: #"^([ \t]*)[-*+][ \t]+\[[ xX]?\](?:[ \t]+|$)"#)
+        private static let quoteRegex = try? NSRegularExpression(pattern: #"^([ \t]*)>[ \t]?"#)
+
+        /// Pre-compiled regex matching the leading indentation (group 1) and mark of this style.
+        var regex: NSRegularExpression? {
             switch self {
-            case .bullet: #"^[-*+][ \t]+(?!\[[ xX]\])"#
-            case .numbered: #"^\d+[.)][ \t]+"#
-            case .checklist: #"^[-*+][ \t]+\[[ xX]\][ \t]+"#
-            case .quote: #"^>[ \t]?"#
+            case .bullet: Self.bulletRegex
+            case .numbered: Self.numberedRegex
+            case .checklist: Self.checklistRegex
+            case .quote: Self.quoteRegex
             }
         }
     }
 
     private static let anyLinePrefix = try? NSRegularExpression(
-        pattern: #"^(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|>[ \t]?)"#
+        pattern: #"^([ \t]*)(?:[-*+][ \t]+(?:\[[ xX]?\](?:[ \t]+|$))?|\d+[.)][ \t]+|>[ \t]?)"#
     )
 
     private static func removingPrefix(_ style: LineStyle, from line: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: style.pattern),
+        guard let regex = style.regex,
               let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length))
         else { return nil }
-        return (line as NSString).replacingCharacters(in: match.range, with: "")
+        let ns = line as NSString
+        let indent = ns.substring(with: match.range(at: 1))
+        return indent + ns.substring(from: NSMaxRange(match.range))
     }
 
     /// Adds the style to every non-empty selected line, or removes it when all of them already have it.
     private static func toggleLines(_ style: LineStyle, in source: NSString, selection: NSRange) -> TextEdit {
         let lines = source.lineRange(for: selection)
-        let block = source.substring(with: lines)
-        let endsWithNewline = block.hasSuffix("\n")
-        var parts = block.components(separatedBy: "\n")
-        if endsWithNewline { parts.removeLast() }
+        var lineEntries: [(content: String, terminator: String)] = []
+        var offset = lines.location
+        if lines.length == 0 {
+            lineEntries.append(("", ""))
+        } else {
+            while offset < NSMaxRange(lines) {
+                let lineRange = source.lineRange(for: NSRange(location: offset, length: 0))
+                lineEntries.append(splitTerminator(of: lineRange, in: source))
+                offset = NSMaxRange(lineRange)
+            }
+        }
 
         let isBlank: (String) -> Bool = { $0.trimmingCharacters(in: .whitespaces).isEmpty }
         // A single blank line still counts, so the button starts a list on an empty line.
-        let candidates = parts.indices.filter { !isBlank(parts[$0]) || parts.count == 1 }
-        let allHaveStyle = !candidates.isEmpty && candidates.allSatisfy { removingPrefix(style, from: parts[$0]) != nil }
+        let candidates = lineEntries.indices.filter { !isBlank(lineEntries[$0].content) || lineEntries.count == 1 }
+        let allHaveStyle = !candidates.isEmpty && candidates.allSatisfy { removingPrefix(style, from: lineEntries[$0].content) != nil }
 
+        let oldFirstLength = (lineEntries.first?.content as NSString?)?.length ?? 0
         var number = 1
         for index in candidates {
-            if allHaveStyle, let stripped = removingPrefix(style, from: parts[index]) {
-                parts[index] = stripped
+            if allHaveStyle, let stripped = removingPrefix(style, from: lineEntries[index].content) {
+                lineEntries[index].content = stripped
             } else {
-                var line = parts[index]
-                if let other = anyLinePrefix?.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) {
-                    line = (line as NSString).replacingCharacters(in: other.range, with: "")
+                let line = lineEntries[index].content
+                let ns = line as NSString
+                if let other = anyLinePrefix?.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) {
+                    let indent = ns.substring(with: other.range(at: 1))
+                    let rest = ns.substring(from: NSMaxRange(other.range))
+                    lineEntries[index].content = indent + style.prefix(number: number) + rest
+                } else {
+                    let indent = line.prefix { $0 == " " || $0 == "\t" }
+                    let rest = line.dropFirst(indent.count)
+                    lineEntries[index].content = String(indent) + style.prefix(number: number) + String(rest)
                 }
-                parts[index] = style.prefix(number: number) + line
                 number += 1
             }
         }
 
-        let replacement = parts.joined(separator: "\n") + (endsWithNewline ? "\n" : "")
+        let replacement = lineEntries.map { $0.content + $0.terminator }.joined()
+        let trailingTerminatorLength = (lineEntries.last?.terminator as NSString?)?.length ?? 0
         let newSelection: NSRange
         if selection.length == 0 {
-            let oldFirst = (block.components(separatedBy: "\n").first ?? "") as NSString
-            let newFirst = (parts.first ?? "") as NSString
-            let caret = selection.location + newFirst.length - oldFirst.length
-            newSelection = NSRange(location: min(max(caret, lines.location), lines.location + newFirst.length), length: 0)
+            let newFirstLength = (lineEntries.first?.content as NSString?)?.length ?? 0
+            let caret = selection.location + newFirstLength - oldFirstLength
+            newSelection = NSRange(location: min(max(caret, lines.location), lines.location + newFirstLength), length: 0)
         } else {
-            let length = (replacement as NSString).length - (endsWithNewline ? 1 : 0)
+            let length = max(0, (replacement as NSString).length - trailingTerminatorLength)
             newSelection = NSRange(location: lines.location, length: length)
         }
         return TextEdit(range: lines, replacement: replacement, selection: newSelection)
@@ -287,11 +359,19 @@ public enum MarkdownEditing {
         return trimmed.count >= 2 && trimmed.hasPrefix("|") && trimmed.hasSuffix("|")
     }
 
-    /// The row under a header: only pipes, colons, dashes, and spaces, with at least one dash.
+    /// The row under a header: every cell contains only optional colons and at least one dash.
     public static func isTableSeparator(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isTableRow(trimmed), trimmed.contains("-") else { return false }
-        return trimmed.allSatisfy { "|:- ".contains($0) }
+        guard isTableRow(trimmed) else { return false }
+        let cells = MarkdownTable.cells(of: trimmed)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            guard !cell.isEmpty else { return false }
+            var body = cell[...]
+            if body.hasPrefix(":") { body = body.dropFirst() }
+            if body.hasSuffix(":") { body = body.dropLast() }
+            return !body.isEmpty && body.allSatisfy { $0 == "-" }
+        }
     }
 
     /// Where the pipes that divide a table row into cells are (UTF-16). A pipe after a backslash is part of a cell.

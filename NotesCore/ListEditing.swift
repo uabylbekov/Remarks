@@ -19,7 +19,7 @@ extension MarkdownEditing {
         var continuation: String {
             switch kind {
             case .bullet(let marker, let checkbox): indent + marker + " " + (checkbox ? "[ ] " : "")
-            case .numbered(let number, let separator): indent + "\(number + 1)\(separator) "
+            case .numbered(let number, let separator): indent + "\(number == Int.max ? number : number + 1)\(separator) "
             case .quote: quoteContinuation ?? (indent + "> ")
             }
         }
@@ -37,13 +37,15 @@ extension MarkdownEditing {
 
         if let match = listPattern?.firstMatch(in: line, range: range) {
             let indent = source.substring(with: match.range(at: 1))
-            if match.range(at: 2).location != NSNotFound, let number = Int(source.substring(with: match.range(at: 2))) {
+            if match.range(at: 2).location != NSNotFound {
+                guard let number = Int(source.substring(with: match.range(at: 2))) else { return nil }
                 return ListItem(
                     indent: indent,
                     kind: .numbered(number: number, separator: source.substring(with: match.range(at: 3))),
                     prefixLength: match.range.length
                 )
             }
+            guard match.range(at: 4).location != NSNotFound else { return nil }
             let hasCheckbox = match.range(at: 5).location != NSNotFound
             var item = ListItem(
                 indent: indent,
@@ -81,17 +83,19 @@ extension MarkdownEditing {
     private static func listReturnEdit(in text: String, selection: NSRange) -> TextEdit? {
         guard selection.length == 0 else { return nil }
         let source = text as NSString
-        guard selection.location <= source.length else { return nil }
+        guard selection.location >= 0, selection.location <= source.length else { return nil }
 
         let lineRange = source.lineRange(for: selection)
-        var line = source.substring(with: lineRange)
-        if line.hasSuffix("\n") { line.removeLast() }
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: lineRange)
+        let lineLength = contentsEnd - lineRange.location
+        guard selection.location <= contentsEnd else { return nil }
+        let line = source.substring(with: NSRange(location: lineRange.location, length: lineLength))
         guard let item = parseListItem(line) else { return nil }
 
         let caretInLine = selection.location - lineRange.location
         guard caretInLine >= item.prefixLength else { return nil }
 
-        let lineLength = (line as NSString).length
         let content = (line as NSString).substring(from: min(item.prefixLength, lineLength))
         if content.trimmingCharacters(in: .whitespaces).isEmpty && caretInLine == lineLength && !item.isFreshCheckbox {
             if !item.indent.isEmpty {
@@ -121,27 +125,43 @@ extension MarkdownEditing {
         )
     }
 
-    private static let checkboxPattern = try? NSRegularExpression(pattern: #"^([ \t]*[-*+][ \t]+\[)([ xX]?)(\])"#)
+    private static let checkboxPattern = try? NSRegularExpression(pattern: #"^([ \t]*[-*+][ \t]+\[)([ xX]?)(\])(?=[ \t]+|$)"#)
 
     /// Flips `[ ]`, `[]`, and `[x]` on the line that contains `location`. Nil if that line is not a checklist item.
-    /// `selection` is carried through unchanged, because tapping a box must not move the caret.
+    /// `selection` is shifted when `[]` grows to `[x]` so offsets after the box stay valid.
     public static func toggleChecklist(in text: String, atLine location: Int, keepingSelection selection: NSRange) -> TextEdit? {
         let source = text as NSString
         guard location >= 0, location <= source.length else { return nil }
 
         let lineRange = source.lineRange(for: NSRange(location: location, length: 0))
-        let line = source.substring(with: lineRange)
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: lineRange)
+        let line = source.substring(with: NSRange(location: lineRange.location, length: contentsEnd - lineRange.location))
         guard let match = checkboxPattern?.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) else {
             return nil
         }
         let state = match.range(at: 2)
         let current = (line as NSString).substring(with: state)
         let isChecked = current == "x" || current == "X"
+        let editRange = NSRange(location: lineRange.location + state.location, length: state.length)
+        let replacement = isChecked ? " " : "x"
+        let delta = (replacement as NSString).length - editRange.length
+        var kept = selection
+        if delta != 0 {
+            if kept.location >= NSMaxRange(editRange) {
+                kept.location += delta
+            } else if NSMaxRange(kept) > editRange.location {
+                kept.length = max(0, kept.length + delta)
+            }
+            let newLength = source.length + delta
+            kept.location = min(max(kept.location, 0), newLength)
+            kept.length = min(max(kept.length, 0), newLength - kept.location)
+        }
         // `[]` has nothing between the brackets, so checking it inserts the `x`.
         return TextEdit(
-            range: NSRange(location: lineRange.location + state.location, length: state.length),
-            replacement: isChecked ? " " : "x",
-            selection: selection
+            range: editRange,
+            replacement: replacement,
+            selection: kept
         )
     }
 }

@@ -13,31 +13,28 @@ import AppKit
 /// Integration contracts between Markdown source, display-only styling, and native viewport layout.
 @MainActor
 struct EditorPresentationTests {
-    @Test(arguments: ["> hello\n> ", "> first\n> second\n> ", "> " + String(repeating: "wrapped quote ", count: 30) + "\n> "])
-    func backspaceOnEmptyQuoteDoesNotDecorateTrailingCaretLine(source: String) throws {
+    @Test(arguments: ["# Heading", "> quote", "**bold** and `code`", "[link](https://example.com)", "- item", "---", "Title\n=====", "```python\nprint(1)\n```", "~~~swift\nlet x = 1\n~~~", "```\n", "> first\n> "])
+    func visibleSyntaxUsesNativeEditing(source: String) throws {
         let (content, preview) = fixture(source)
-        let storage = try #require(content.textStorage)
-        guard case .edit(let edit) = preview.backspace(at: storage.length) else {
-            Issue.record("Backspace should remove the empty quote marker")
-            return
+        defer { withExtendedLifetime(preview) {} }
+        let text = source as NSString
+        var location = 0
+        while location < text.length {
+            let range = text.lineRange(for: NSRange(location: location, length: 0))
+            let styled = preview.textContentStorage(content, textParagraphWith: range)?.attributedString
+            #expect(styled?.string ?? text.substring(with: range) == text.substring(with: range))
+            location = NSMaxRange(range)
         }
-        storage.replaceCharacters(in: edit.range, with: edit.replacement)
-        #expect(storage.string == String(source.dropLast(2)))
-        let manager = try #require(content.textLayoutManagers.first)
-        manager.ensureLayout(for: content.documentRange)
-        var quotes = 0
-        manager.enumerateTextLayoutFragments(from: content.documentRange.location, options: [.ensuresLayout]) { fragment in
-            guard let quote = fragment as? DecorationFragment, let bar = quote.quoteBarBounds else { return true }
-            quotes += 1
-            let lines = fragment.textLineFragments.filter { $0.characterRange.length > 0 }
-            #expect(bar.maxY == (lines.last?.typographicBounds.maxY ?? 0) + 2)
-            for line in fragment.textLineFragments where line.characterRange.length == 0 {
-                #expect(bar.maxY < line.typographicBounds.maxY)
-            }
-            return true
+        for offset in 0...text.length {
+            let caret = NSRange(location: offset, length: 0)
+            #expect(preview.selectionForPreview(caret) == caret)
+            #expect(preview.adjustedSelection(to: caret) == nil)
+            #expect(preview.redirectedInsert("x", at: caret) == nil)
+            #expect(preview.redirectedInsert("\n", at: caret) == nil)
+            if case .normal = preview.backspace(at: offset) {} else { Issue.record("Backspace should use native editing") }
+            if case .normal = preview.deleteForward(at: offset) {} else { Issue.record("Delete should use native editing") }
+            preview.selectionChanged(to: caret)
         }
-        #expect(quotes > 0)
-        withExtendedLifetime(preview) {}
     }
 
     @Test(arguments: [MarkdownCommand.bold, .italic, .strikethrough, .inlineCode])
@@ -60,7 +57,41 @@ struct EditorPresentationTests {
         #expect((storage.string as NSString).substring(with: span.content) == "Hello 😀 world")
         #expect(caret.location == NSMaxRange(span.content))
         let right = preview.adjustedSelection(to: NSRange(location: caret.location + 1, length: 0))
-        #expect((right?.location ?? caret.location + 1) == NSMaxRange(span.range))
+        #expect(right == nil)
+    }
+
+    @Test(arguments: ["**bold**", "*italic*", "~~removed~~", "`code`", "[label](https://example.com)", "**bold *nested***"])
+    func inlineSyntaxAppearsOnlyWhileEditing(value: String) throws {
+        let source = "Before " + value + " after"
+        let (content, preview) = fixture(source)
+        let spans = InlineScanner.spans(in: source)
+        let span = try #require(spans.first)
+        let marker = try #require(span.markers.first)
+        func markerFont() throws -> EditorFont {
+            let paragraph = try #require(preview.textContentStorage(content, textParagraphWith: NSRange(location: 0, length: source.utf16.count))?.attributedString)
+            #expect(paragraph.string == source)
+            return try #require(paragraph.attribute(.font, at: marker.location, effectiveRange: nil) as? EditorFont)
+        }
+        #expect(try markerFont().pointSize < 1)
+        preview.selectionChanged(to: NSRange(location: span.content.location + 1, length: 0))
+        #expect(try markerFont().pointSize > 1)
+        preview.selectionChanged(to: NSRange(location: source.utf16.count, length: 0))
+        #expect(try markerFont().pointSize < 1)
+        preview.selectionChanged(to: NSRange(location: 0, length: source.utf16.count))
+        #expect(try markerFont().pointSize > 1)
+        #expect(content.textStorage?.string == source)
+    }
+
+    @Test func editingOneInlineSpanKeepsItsNeighborQuiet() throws {
+        let source = "**first** and **second**"
+        let (content, preview) = fixture(source)
+        preview.selectionChanged(to: NSRange(location: 4, length: 0))
+        let paragraph = try #require(preview.textContentStorage(content, textParagraphWith: NSRange(location: 0, length: source.utf16.count))?.attributedString)
+        let spans = InlineScanner.spans(in: source)
+        let first = try #require(paragraph.attribute(.font, at: spans[0].markers[0].location, effectiveRange: nil) as? EditorFont)
+        let second = try #require(paragraph.attribute(.font, at: spans[1].markers[0].location, effectiveRange: nil) as? EditorFont)
+        #expect(first.pointSize > 1)
+        #expect(second.pointSize < 1)
     }
 
     private func fixture(_ source: String) -> (NSTextContentStorage, LivePreviewController) {
@@ -73,62 +104,6 @@ struct EditorPresentationTests {
         preview.reload()
         // The storage owns its layout manager, and the controller intentionally holds both weakly.
         return (storage, preview)
-    }
-
-    /// Down from the last line of code leaves the block, instead of stopping on its hidden closing fence.
-    @Test func downFromTheLastCodeLineLeavesTheBlock() throws {
-        let source = "```swift\nlet a = 1\nlet b = 2\n```\nAfter"
-        let (_, preview) = fixture(source)
-        defer { withExtendedLifetime(preview) {} }
-        let code = try #require(CodeBlockScanner.scan(source).first)
-        let lastLineEnd = (source as NSString).range(of: "let b = 2").upperBound
-        let edit = try #require(preview.moveDownFromCode(at: NSRange(location: lastLineEnd, length: 0)))
-        #expect(edit.replacement.isEmpty)
-        #expect(edit.selection == NSRange(location: NSMaxRange(code.whole), length: 0), "caret goes to the line after the block")
-        // Any earlier line keeps native navigation, which moves to the next line of code.
-        let firstLineEnd = (source as NSString).range(of: "let a = 1").upperBound
-        #expect(preview.moveDownFromCode(at: NSRange(location: firstLineEnd, length: 0)) == nil)
-    }
-
-    /// The closing fence is never seen, so the caret never rests on its row (a tall bar at the foot of the card).
-    @Test func theCaretNeverRestsOnAClosingFence() throws {
-        let source = "```swift\nlet a = 1\nlet b = 2\n```\nAfter"
-        let (_, preview) = fixture(source)
-        defer { withExtendedLifetime(preview) {} }
-        let text = source as NSString
-        let endOfCode = text.range(of: "let b = 2").upperBound
-        let close = text.range(of: "```", options: .backwards)
-        let after = text.range(of: "After").location
-
-        // Up from the line below lands on the closing row, and goes to the end of the last line of code instead.
-        preview.selectionChanged(to: NSRange(location: after, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: close.location + 1, length: 0)) == NSRange(location: endOfCode, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: NSMaxRange(close), length: 0)) == NSRange(location: endOfCode, length: 0))
-
-        // A click on the closing row does the same.
-        preview.selectionChanged(to: NSRange(location: 0, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: close.location + 2, length: 0)) == NSRange(location: endOfCode, length: 0))
-
-        // Right from the end of the last line of code goes on to the line after the block.
-        preview.selectionChanged(to: NSRange(location: endOfCode, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: close.location, length: 0)) == NSRange(location: after, length: 0))
-
-        // Everywhere else is left alone: inside the code, and in the line after.
-        #expect(preview.adjustedSelection(to: NSRange(location: endOfCode - 3, length: 0)) == nil)
-        #expect(preview.adjustedSelection(to: NSRange(location: after + 2, length: 0)) == nil)
-    }
-
-    @Test func aBlockAtTheEndOfTheNoteKeepsTheCaretOnItsLastLineOfCode() throws {
-        let source = "```\nx\n```"
-        let (_, preview) = fixture(source)
-        defer { withExtendedLifetime(preview) {} }
-        let text = source as NSString
-        let endOfCode = text.range(of: "x").upperBound
-        // Right from the end of the code has no line to go to, so the caret stays; a click on the row goes to the code.
-        preview.selectionChanged(to: NSRange(location: endOfCode, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: endOfCode + 1, length: 0)) == NSRange(location: endOfCode, length: 0))
-        preview.selectionChanged(to: NSRange(location: 0, length: 0))
-        #expect(preview.adjustedSelection(to: NSRange(location: text.length, length: 0)) == NSRange(location: endOfCode, length: 0))
     }
 
     /// Backspace at the start of an attachment or a table never joins the line above into it. It is not a dead key either.
@@ -169,71 +144,6 @@ struct EditorPresentationTests {
         #expect(keep.selection == NSRange(location: (table as NSString).length + 1, length: 0))
     }
 
-    @Test(arguments: ["```\n\n```", "```swift\n\n```\n", "Before\n~~~\n\n~~~\nAfter"])
-    func emptyCodeBlockKeyboardActions(source: String) throws {
-        let (storage, preview) = fixture(source)
-        let code = try #require(CodeBlockScanner.scan(source).first)
-        for caret in [code.open.location, NSMaxRange(code.open) - 1, code.body.location, NSMaxRange(code.close!) - 1] {
-            guard case .edit(let edit) = preview.backspace(at: caret) else {
-                Issue.record("Backspace must remove the empty code block"); continue
-            }
-            #expect(edit.range == code.whole)
-            #expect(edit.replacement.isEmpty)
-            #expect(edit.selection.location == code.whole.location)
-        }
-        let down = try #require(preview.moveDownFromCode(at: NSRange(location: code.body.location, length: 0)))
-        let result = (source as NSString).replacingCharacters(in: down.range, with: down.replacement)
-        #expect(down.selection.location == NSMaxRange(code.whole) + down.replacement.utf16.count)
-        #expect(result.hasPrefix(source))
-        let close = try #require(code.close)
-        // Return with the caret at the end of the hidden closing fence line, where the caret rests after Down or a click.
-        var closeLineEnd = 0
-        (source as NSString).getLineStart(nil, end: nil, contentsEnd: &closeLineEnd, for: close)
-        let enter = try #require(preview.redirectedInsert("\n", at: NSRange(location: closeLineEnd, length: 0)))
-        let entered = (source as NSString).replacingCharacters(in: enter.range, with: enter.replacement)
-        #expect(CodeBlockScanner.scan(entered).first?.body.length == code.body.length + 1)
-        #expect(storage.textStorage?.string == source)
-    }
-
-    /// Typing three backticks and Return leaves a fence that is not closed yet, with the caret at the end of the text.
-    @Test(arguments: ["```\n", "```swift\n", "Before\n```\n"])
-    func emptyUnclosedCodeBlockKeyboardActions(source: String) throws {
-        let (storage, preview) = fixture(source)
-        let code = try #require(CodeBlockScanner.scan(source).first)
-        #expect(code.close == nil)
-        let end = (source as NSString).length
-
-        guard case .edit(let removal) = preview.backspace(at: end) else {
-            Issue.record("Backspace must remove the empty, unclosed code block"); return
-        }
-        #expect(removal.range == code.whole)
-        #expect(removal.replacement.isEmpty)
-        #expect(removal.selection.location == code.whole.location)
-
-        // Down closes the empty block with an empty line inside it, and goes to a new line below it.
-        let down = try #require(preview.moveDownFromCode(at: NSRange(location: end, length: 0)))
-        let closed = (source as NSString).replacingCharacters(in: down.range, with: down.replacement)
-        let block = try #require(CodeBlockScanner.scan(closed).first)
-        #expect(block.close != nil)
-        #expect(block.body.length == 1)
-        #expect(down.selection.location == (closed as NSString).length)
-
-        // Return adds a line inside the block, which the text view does natively.
-        #expect(preview.redirectedInsert("\n", at: NSRange(location: end, length: 0)) == nil)
-        #expect(preview.isInCodeBlock(end))
-        #expect(storage.textStorage?.string == source)
-    }
-
-    @Test func populatedCodeIsNotRemovedByBackspace() {
-        let (storage, preview) = fixture("```swift\nvalue\n```")
-        guard case .normal = preview.backspace(at: 11) else { Issue.record("Code text should use native deletion"); return }
-        // Down from the only code line leaves the block, past its hidden closing fence, and removes nothing.
-        let down = preview.moveDownFromCode(at: NSRange(location: 10, length: 0))
-        #expect(down?.range.length == 0 && down?.replacement == "\n")
-        #expect(down?.selection == NSRange(location: 19, length: 0))
-        #expect(storage.textStorage?.string.contains("value") == true)
-    }
-
     private func components(_ color: EditorColor) -> [CGFloat] {
         #if canImport(UIKit)
         return color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).cgColor.components ?? []
@@ -244,6 +154,32 @@ struct EditorPresentationTests {
         }
         return result
         #endif
+    }
+
+    @Test func editingTheFenceLanguageRefreshesHighlighting() throws {
+        let (content, preview) = fixture("```unknown\nlet answer = 42\n```")
+        let storage = try #require(content.textStorage)
+        storage.replaceCharacters(in: NSRange(location: 3, length: 7), with: "swift")
+        let block = try #require(preview.blocks.first)
+        #expect(block.language == "swift")
+        let fence = try #require(preview.textContentStorage(content, textParagraphWith: block.open)?.attributedString)
+        #expect(fence.string == "```swift\n")
+        let markerColor = try #require(fence.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? EditorColor)
+        let languageColor = try #require(fence.attribute(.foregroundColor, at: 3, effectiveRange: nil) as? EditorColor)
+        #expect(components(markerColor) == components(EditorTheme.dimColor))
+        #expect(components(languageColor) == components(EditorTheme.codeTextColor))
+        #expect(preview.syntaxTokens(for: block).contains { $0.scope == .keyword })
+    }
+
+    @Test func checkboxesRemainControlsWithEditableInlineSyntax() throws {
+        let source = "- [ ] **Task**"
+        let (content, preview) = fixture(source)
+        let paragraph = try #require(preview.textContentStorage(content, textParagraphWith: NSRange(location: 0, length: source.utf16.count))?.attributedString)
+        #expect(paragraph.attribute(LivePreviewController.checklistKey, at: 0, effectiveRange: nil) != nil)
+        #expect(paragraph.string.hasSuffix("**Task**"))
+        let caret = NSRange(location: 7, length: 0)
+        #expect(preview.adjustedSelection(to: caret) == nil)
+        #expect(content.textStorage?.string == source)
     }
 
     @Test func codeKeepsItsSyntaxColorsInTheDisplayParagraph() throws {
@@ -300,7 +236,7 @@ struct EditorPresentationTests {
     }
 
     @Test(arguments: ["```\n\n```\n", "```swift\nlet value = 1\n```\n", "```swift\n", "Before\n```\n\n```\nAfter"])
-    func codeCardUsesNativeLineGeometry(source: String) throws {
+    func codeUsesNativeLineGeometry(source: String) throws {
         let (storage, preview) = fixture(source)
         let manager = try #require(storage.textLayoutManagers.first)
         manager.ensureLayout(for: storage.documentRange)
@@ -309,8 +245,8 @@ struct EditorPresentationTests {
             guard let code = fragment as? CodeBlockFragment else { return true }
             count += 1
             for line in fragment.textLineFragments where line.characterRange.length > 0 {
-                #expect(line.typographicBounds.minY >= code.cardBounds.minY)
-                #expect(line.typographicBounds.maxY <= code.cardBounds.maxY)
+                #expect(line.typographicBounds.minY >= 0)
+                #expect(line.typographicBounds.maxY <= code.layoutFragmentFrame.height)
             }
             return true
         }
@@ -320,45 +256,215 @@ struct EditorPresentationTests {
         #expect(!preview.blocks.isEmpty)
     }
 
-    @Test(arguments: ["```\n\n```", "```swift\nlet x = 1\n```", "Before\n~~~\nx\n~~~"])
-    func languageHitTargetIsOnlyTheOpeningRow(source: String) throws {
-        let (storage, preview) = fixture(source)
-        let manager = try #require(storage.textLayoutManagers.first)
-        manager.ensureLayout(for: storage.documentRange)
-        var headerPoint: CGPoint?
-        manager.enumerateTextLayoutFragments(from: storage.documentRange.location, options: [.ensuresLayout]) { fragment in
-            guard let code = fragment as? CodeBlockFragment else { return true }
-            let frame = fragment.layoutFragmentFrame
-            if let bounds = code.languageBounds {
-                #expect(preview.codeLanguage(for: code.textElement) == CodeBlockScanner.scan(source).first?.language)
-                let point = CGPoint(x: frame.minX + bounds.midX, y: frame.minY + bounds.midY)
-                headerPoint = point
-                #expect(preview.codeLanguageBlock(at: point) != nil)
-            } else if let line = code.textLineFragments.first {
-                let point = CGPoint(x: 100, y: frame.minY + line.typographicBounds.midY)
-                #expect(preview.codeLanguageBlock(at: point) == nil)
-            }
-            return true
-        }
-        _ = try #require(headerPoint)
-        #expect(storage.textStorage?.string == source)
-    }
-
-    @Test func hiddenCodeFencePreservesFontMetricsAndSourceOffsets() throws {
+    @Test func visibleCodeFencePreservesFontMetricsAndSourceOffsets() throws {
         let source = "```swift\nlet value = 1\n```"
         let (storage, preview) = fixture(source)
         let block = try #require(preview.blocks.first)
         let paragraph = try #require(preview.textContentStorage(storage, textParagraphWith: block.open)?.attributedString)
         #expect(paragraph.length == block.open.length)
-        #expect((paragraph.string as NSString).substring(with: NSRange(location: 0, length: 3)) == String(repeating: "\u{200B}", count: 3))
+        #expect((paragraph.string as NSString).substring(with: NSRange(location: 0, length: 3)) == "```")
         let font = try #require(paragraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont)
         #expect(font.pointSize > 1)
         #expect(storage.textStorage?.string == source)
     }
 
+    @Test(arguments: [
+        ("- [ ] task continuation", "continuation"),
+        ("- [x] done continuation", "continuation"),
+        ("- item continuation", "continuation"),
+        ("> quote continuation", "continuation"),
+    ])
+    func continuationParagraphPastBlockMarkerStylesSafely(source: String, tail: String) throws {
+        let (storage, preview) = fixture(source)
+        defer { withExtendedLifetime(preview) {} }
+        let tailRange = (source as NSString).range(of: tail)
+        let styled = preview.textContentStorage(storage, textParagraphWith: tailRange)?.attributedString
+        #expect(styled?.string == tail)
+    }
+
+    @Test func attachmentTempURLSanitizesPathTraversal() throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let note = Library(context: store.mainContext).createNote(body: "")
+        let attachment = try AttachmentStore(context: store.mainContext).add(
+            data: Data("hello".utf8),
+            fileName: "../../outside.txt",
+            typeIdentifier: "public.plain-text",
+            to: note
+        )
+        let url = try #require(AttachmentFiles.temporaryURL(for: attachment))
+        let expectedDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(attachment.id.uuidString, isDirectory: true)
+            .standardizedFileURL
+        #expect(url.standardizedFileURL.deletingLastPathComponent() == expectedDirectory)
+        #expect(url.lastPathComponent == "outside.txt")
+    }
+
+    @Test func conflictingIncomingEditPreservesConflictCopy() throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let context = store.mainContext
+        let library = Library(context: context)
+        let folder = try library.createFolder(named: "Work")
+        let note = library.createNote(body: "Original", in: folder)
+        try context.save()
+
+        var editorText = ""
+        let session = EditorSession(note: note, commands: nil, rendersMarkdown: false)
+        session.attach(
+            host: .init(
+                text: { editorText },
+                setText: { editorText = $0 },
+                selection: { NSRange(location: 0, length: 0) },
+                isComposing: { false },
+                applyEdit: { _ in true },
+                undoManager: { nil },
+                applyFont: {},
+                applyBodyStyle: {},
+                setEditable: { _ in },
+                focus: {}
+            ),
+            textLayoutManager: nil
+        )
+        // Simulate unsaved local typing + simultaneous external change (iCloud / Siri).
+        editorText = "Local typing"
+        let incomingAttachment = try AttachmentStore(context: context).add(
+            data: Data([1, 2, 3]), fileName: "Incoming.pdf", typeIdentifier: "com.adobe.pdf", to: note
+        )
+        note.setBody("Incoming from iCloud\n" + AttachmentStore.markdown(for: incomingAttachment))
+        session.update(note: note)
+        session.detach()
+
+        let notes = try context.fetch(FetchDescriptor<Note>())
+        #expect(notes.count == 2)
+        #expect(notes.contains { $0.id == note.id && $0.body == "Local typing" })
+        let recovery = try #require(notes.first { $0.id != note.id })
+        #expect(recovery.body.hasPrefix("Incoming from iCloud\n"))
+        #expect(recovery.folder?.id == folder.id)
+        let recoveredAttachment = try #require(recovery.attachments?.first)
+        #expect(recoveredAttachment.id != incomingAttachment.id)
+        #expect(recoveredAttachment.data == Data([1, 2, 3]))
+        #expect(AttachmentLine.references(in: recovery.body) == [recoveredAttachment.id])
+    }
+
+    /// Regression test for empty-note Header and Bold inserting unstyled 12pt black `#` or `**`.
+    @Test func emptyNoteHeaderAndBoldRenderWithThemeFontAndDimColor() throws {
+        // Heading on an empty note (`# `) with unattributed raw storage must style at heading font + dimColor.
+        let headingEdit = MarkdownEditing.edit(.heading, in: "", selection: NSRange(location: 0, length: 0))
+        let (headingStorage, headingPreview) = fixture(headingEdit.replacement)
+        defer { withExtendedLifetime(headingPreview) {} }
+        headingPreview.didProgrammaticallyChangeSelection(to: headingEdit.selection)
+        let headingParagraph = try #require(
+            headingPreview.textContentStorage(headingStorage, textParagraphWith: NSRange(location: 0, length: headingEdit.replacement.utf16.count))?.attributedString
+        )
+        let headingFont = try #require(headingParagraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont)
+        let headingColor = try #require(headingParagraph.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? EditorColor)
+        #expect(headingFont.pointSize == EditorTheme.headingFont(level: 1).pointSize)
+        #expect(components(headingColor) == components(EditorTheme.dimColor))
+        #expect(headingPreview.activeFormattingCommands().contains(.heading))
+
+        // Bold on an empty note (`****`, caret at 2) with unattributed raw storage must style at prose font + dimColor.
+        let boldEdit = MarkdownEditing.edit(.bold, in: "", selection: NSRange(location: 0, length: 0))
+        let (boldStorage, boldPreview) = fixture(boldEdit.replacement)
+        defer { withExtendedLifetime(boldPreview) {} }
+        boldPreview.didProgrammaticallyChangeSelection(to: boldEdit.selection)
+        let boldParagraph = try #require(
+            boldPreview.textContentStorage(boldStorage, textParagraphWith: NSRange(location: 0, length: boldEdit.replacement.utf16.count))?.attributedString
+        )
+        let boldFont = try #require(boldParagraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont)
+        let boldColor = try #require(boldParagraph.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? EditorColor)
+        #expect(boldFont.pointSize == EditorTheme.proseFont.pointSize)
+        #expect(components(boldColor) == components(EditorTheme.dimColor))
+        #expect(boldPreview.activeFormattingCommands().contains(.bold))
+
+        // Moving caret outside `****` returns it to base prose color (never raw default black).
+        boldPreview.selectionChanged(to: NSRange(location: boldEdit.replacement.utf16.count, length: 0))
+        let plainParagraph = try #require(
+            boldPreview.textContentStorage(boldStorage, textParagraphWith: NSRange(location: 0, length: boldEdit.replacement.utf16.count))?.attributedString
+        )
+        let plainFont = try #require(plainParagraph.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont)
+        let plainColor = try #require(plainParagraph.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? EditorColor)
+        #expect(plainFont.pointSize == EditorTheme.proseFont.pointSize)
+        #expect(components(plainColor) == components(EditorTheme.baseColor))
+        #expect(!boldPreview.activeFormattingCommands().contains(.bold))
+    }
+
+    @Test func trashedNoteSessionIsReadOnlyUntilRestored() throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let context = store.mainContext
+        let library = Library(context: context)
+        let note = library.createNote(body: "Original")
+        library.trash(note)
+        try context.save()
+
+        var editorText = ""
+        var editableStates: [Bool] = []
+        let commands = EditorCommands()
+        let session = EditorSession(note: note, commands: commands, rendersMarkdown: false)
+        session.attach(
+            host: .init(
+                text: { editorText },
+                setText: { editorText = $0 },
+                selection: { NSRange(location: 0, length: 0) },
+                isComposing: { false },
+                applyEdit: { edit in
+                    editorText = (editorText as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+                    return true
+                },
+                undoManager: { nil },
+                applyFont: {},
+                applyBodyStyle: {},
+                setEditable: { editableStates.append($0) },
+                focus: {}
+            ),
+            textLayoutManager: nil
+        )
+        #expect(!session.isEditable)
+        #expect(commands.isReadOnly)
+        #expect(editableStates.last == false)
+        #expect(!session.perform(.bold))
+        #expect(editorText == "Original")
+
+        library.restore(note)
+        session.update(note: note)
+        #expect(session.isEditable)
+        #expect(!commands.isReadOnly)
+        #expect(editableStates.last == true)
+        #expect(session.perform(.heading))
+        #expect(editorText == "# Original")
+        session.detach()
+    }
+
+    @Test func deleteForwardAboveTableStepsToTableBoundaryInsteadOfDeleting() throws {
+        let source = "Intro\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        let (_, preview) = fixture(source)
+        defer { withExtendedLifetime(preview) {} }
+        guard case .edit(let edit) = preview.deleteForward(at: 5) else {
+            Issue.record("Forward delete at end of line above table should step to table start")
+            return
+        }
+        #expect(edit.range.length == 0)
+        #expect(edit.replacement.isEmpty)
+        #expect(edit.selection == NSRange(location: 6, length: 0))
+    }
+
+    @Test func replaceTableClampsOverlappingSelectionSafely() throws {
+        let source = "| Long Header A | Long Header B |\n| --- | --- |\n| Value 1 | Value 2 |\nAfter"
+        let (_, preview) = fixture(source)
+        defer { withExtendedLifetime(preview) {} }
+        var applied: TextEdit?
+        preview.applyTableEdit = { applied = $0 }
+        // Place caret inside the table range before shrinking the table.
+        preview.didProgrammaticallyChangeSelection(to: NSRange(location: 40, length: 0))
+        let smaller = MarkdownTable(header: ["A"], alignments: [.none], rows: [["1"]])
+        preview.replaceTable(at: 0, with: smaller)
+        let edit = try #require(applied)
+        let resultLength = (source as NSString).length - edit.range.length + (edit.replacement as NSString).length
+        #expect(NSMaxRange(edit.selection) <= resultLength)
+        #expect(edit.selection.length == 0)
+    }
+
     #if canImport(UIKit)
     @Test(arguments: ["```", "```\n", "```\n\n```\n", "```swift\nlet value = 1\n```"])
-    func firstCodeCaretIsInsideNativeCard(source: String) throws {
+    func firstCodeCaretIsInsideNativeFragment(source: String) throws {
         let view = UITextView(usingTextLayoutManager: true)
         view.frame = CGRect(x: 0, y: 0, width: 400, height: 500)
         view.font = EditorTheme.proseFont
@@ -370,10 +476,10 @@ struct EditorPresentationTests {
         preview.reload()
         manager.ensureLayout(for: storage.documentRange)
         let fragment = try #require(manager.textLayoutFragment(for: storage.documentRange.location) as? CodeBlockFragment)
-        let card = fragment.cardBounds.offsetBy(dx: fragment.layoutFragmentFrame.minX, dy: fragment.layoutFragmentFrame.minY)
+        let bounds = fragment.layoutFragmentFrame
         let caret = view.caretRect(for: view.beginningOfDocument)
-        #expect(caret.minY >= card.minY)
-        #expect(caret.maxY <= card.maxY)
+        #expect(caret.minY >= bounds.minY)
+        #expect(caret.maxY <= bounds.maxY)
         #expect(view.text == source)
     }
 
@@ -395,7 +501,7 @@ struct EditorPresentationTests {
         #expect(lastLine.maxY <= textView.bounds.maxY - textView.adjustedContentInset.bottom)
         #expect(textView.text == source)
         controller.updateKeyboardScrollSpace(overlap: 0)
-        #expect(textView.contentInset.bottom == 0)
+        #expect(textView.contentInset.bottom == NativeEditorViewController.endOfNoteSpace)
     }
 
     @Test func surfaceReachesUnderNavigationAndKeepsTextBelowIt() async throws {
@@ -468,8 +574,8 @@ struct EditorPresentationTests {
         }
     }
 
-    static let longBlock = "```swift\n" + (0..<80).map { "    let value\($0) = \($0)\n" }.joined() + "```\nAfter"
-    static let longBlockCaret = (longBlock as NSString).range(of: "let value40 = 40").upperBound
+    nonisolated static let longBlock = "```swift\n" + (0..<80).map { "    let value\($0) = \($0)\n" }.joined() + "```\nAfter"
+    nonisolated static let longBlockCaret = (longBlock as NSString).range(of: "let value40 = 40").upperBound
 
     /// Frames of every layout fragment, in order. Equal frames mean equal layout, so nothing can jump or go missing.
     private func fragmentFrames(of view: UITextView) throws -> [CGRect] {
@@ -588,6 +694,42 @@ struct EditorPresentationTests {
         try store.mainContext.save()
         try await settle()
         _ = try library.emptyTrash()
+        try store.mainContext.save()
+        try await settle()
+        #expect(try store.mainContext.fetch(FetchDescriptor<Note>()).isEmpty)
+    }
+
+    /// Deleting trashed notes with folders and tags inside a live Sidebar + NoteList keeps both columns stable.
+    @Test func deletingTrashedNotesWithFoldersAndTagsKeepsSidebarAndListAlive() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let library = Library(context: store.mainContext)
+        let folder = try library.createFolder(named: "Work")
+        let note = library.createNote(body: "# Trashed Note\nSome content", in: folder)
+        try library.addTag(named: "urgent", to: note)
+        library.trash(note)
+        try store.mainContext.save()
+        let host = UIHostingController(rootView: NavigationStack {
+            VStack {
+                SidebarView(selection: .constant(.trash), asksNewFolder: .constant(false))
+                NoteListView(scope: .trash, selectedNoteID: .constant(note.id))
+            }
+        }.modelContainer(store))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive })
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        func settle() async throws {
+            for _ in 0..<5 {
+                window.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        try await settle()
+        library.deleteForever(note)
         try store.mainContext.save()
         try await settle()
         #expect(try store.mainContext.fetch(FetchDescriptor<Note>()).isEmpty)

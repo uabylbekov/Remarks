@@ -19,8 +19,6 @@ public enum CodeLanguages {
     public static func displayName(for language: String) -> String {
         let key = language.lowercased()
         if key.isEmpty { return String(localized: "Plain Text", bundle: #bundle) }
-        return all.first { entry in
-            SyntaxGrammars.all.first { $0.name == entry.name }?.aliases.contains(key) == true
-        }?.name ?? language
+        return SyntaxGrammars.engine(forLanguage: key)?.grammar.name ?? language
     }
 }

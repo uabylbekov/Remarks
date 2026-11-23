@@ -75,7 +75,7 @@ public enum SyntaxGrammars {
         rule(.type, capitalized),
     ])
 
-    public static let json = SyntaxGrammar(name: "JSON", aliases: ["json", "jsonc"], ignoresCase: false, rules: [
+    public static let json = SyntaxGrammar(name: "JSON", aliases: ["json", "jsonc"], ignoresCase: false, rules: cStyleComments + [
         rule(.property, doubleQuoted + #"(?=\s*:)"#),
         rule(.string, doubleQuoted),
         rule(.number, #"-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b"#),
@@ -103,7 +103,7 @@ public enum SyntaxGrammars {
 
     public static let rust = SyntaxGrammar(name: "Rust", aliases: ["rust", "rs"], ignoresCase: false, rules: cStyleComments + [
         rule(.string, #""(?:\\.|[^"\\])*""#),
-        rule(.string, #"'(?:\\.|[^'\\\n])'"#),
+        rule(.string, #"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^'\\\n])'"#),
         rule(.attribute, #"#!?\[[^\]\n]*\]"#),
         rule(.number, number),
         rule(.keyword, words("fn let mut const static struct enum impl trait pub use mod crate self Self super if else match for while loop return break continue as in ref move async await dyn where type unsafe extern")),
@@ -115,7 +115,7 @@ public enum SyntaxGrammars {
     public static let go = SyntaxGrammar(name: "Go", aliases: ["go", "golang"], ignoresCase: false, rules: cStyleComments + [
         rule(.string, #"`[^`]*`"#),
         rule(.string, doubleQuoted),
-        rule(.string, #"'(?:\\.|[^'\\\n])'"#),
+        rule(.string, #"'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{3}|.)|[^'\\\n])'"#),
         rule(.number, number),
         rule(.keyword, words("func var const type struct interface map chan package import if else for range switch case default return break continue go defer select fallthrough goto")),
         rule(.constant, words("true false nil iota")),
@@ -148,7 +148,7 @@ public enum SyntaxGrammars {
     ])
 
     /// A declaration's property is the name before a `:` whose value ends in `;` or `}`, which is what tells it from a
-    /// pseudo-class such as `a:hover`. A selector is a name that comes before a `{` with no `;` or `}` in between.
+    /// pseudo-class such as `a:hover`. Selectors precede `{` on the same line, keeping lookahead bounded in linear time.
     public static let css = SyntaxGrammar(name: "CSS", aliases: ["css"], ignoresCase: true, rules: [
         rule(.comment, #"/\*[\s\S]*?\*/"#),
         rule(.string, doubleQuoted),
@@ -156,12 +156,12 @@ public enum SyntaxGrammars {
         rule(.keyword, #"@[A-Za-z-]+"#),
         rule(.keyword, #"!\s*important"#),
         rule(.variable, #"--[A-Za-z0-9_-]+"#),
-        rule(.property, #"[A-Za-z-]+(?=\s*:\s*[^;{}]*[;}])"#),
+        rule(.type, #"[.#][A-Za-z_-][\w-]*(?=[^{};\n]*\{)"#),
+        rule(.property, #"(?<![/\w-])[A-Za-z-]+(?=\s*:(?!//)\s*[^;{}\n]*[;}])"#),
         rule(.number, #"#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b"#),
         rule(.number, #"(?<![\w#.-])-?(?:\d+\.?\d*|\.\d+)(?:px|rem|em|vh|vw|vmin|vmax|ms|s|deg|fr|pt|cm|mm|in|%)?"#),
-        rule(.type, #"[.#][A-Za-z_-][\w-]*(?=[^{};]*\{)"#),
-        rule(.keyword, words("html body div span p a ul ol li h1 h2 h3 h4 h5 h6 img button input section header footer nav main table tr td th form label textarea select svg article aside figure video canvas code pre small strong em") + #"(?=[^{};]*\{)"#),
-        rule(.attribute, #"::?[A-Za-z-]+(?=[^{};]*\{)"#),
+        rule(.keyword, words("html body div span p a ul ol li h1 h2 h3 h4 h5 h6 img button input section header footer nav main table tr td th form label textarea select svg article aside figure video canvas code pre small strong em") + #"(?=[^{};\n]*\{)"#),
+        rule(.attribute, #"::?[A-Za-z-]+(?=[^{};\n]*\{)"#),
         rule(.function, #"[A-Za-z-]+(?=\()"#),
         rule(.constant, #"(?<![\w-])(?:none|auto|inherit|initial|unset|normal|bold|italic|solid|dashed|dotted|block|inline|flex|grid|absolute|relative|fixed|sticky|static|center|left|right|top|bottom|transparent|hidden|visible|nowrap|pointer)(?![\w-])"#),
     ])

@@ -196,6 +196,19 @@ struct AttachmentTests {
         #expect(note.body.contains("attachment://"))
     }
 
+    @Test func exportEncodesLiteralPercentEscapesAndFragmentCharacters() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1]), fileName: "Plan%20(final)#1.pdf", typeIdentifier: UTType.pdf.identifier, to: note
+        )
+        note.setBody(AttachmentStore.markdown(for: attachment))
+        let exported = NoteExporter.export(note)
+        let prefix = attachment.id.uuidString.prefix(8)
+        #expect(exported.markdown.contains("attachments/\(prefix)-Plan%2520%28final%29%231.pdf"))
+        #expect(exported.files.first?.path == "attachments/\(prefix)-Plan%20(final)#1.pdf")
+    }
+
     @Test func exportCleansUnsafeCharactersInNames() throws {
         let context = try makeContext()
         let note = Library(context: context).createNote(body: "a/b: c?")
