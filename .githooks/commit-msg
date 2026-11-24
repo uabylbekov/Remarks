@@ -1,0 +1,6 @@
+#!/bin/bash
+# Reject AI attribution lines in commit messages (see AGENTS.md, "Git and GitHub").
+if grep -Eiq '^[[:space:]]*(co-authored-by:|.*generated with)' "$1"; then
+    echo "Commit rejected: remove Co-Authored-By / 'Generated with' lines from the message." >&2
+    exit 1
+fi

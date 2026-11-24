@@ -1,0 +1,12 @@
+#!/bin/bash
+# No commits on main; keep user-specific and system files out of the repo.
+if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+    echo "Commit rejected: don't commit on main. Work on develop and open a pull request." >&2
+    exit 1
+fi
+bad=$(git diff --cached --name-only --diff-filter=AM | grep -E '(^|/)(\.DS_Store|xcuserdata/|DerivedData/)')
+if [ -n "$bad" ]; then
+    echo "Commit rejected: these files must not be committed:" >&2
+    echo "$bad" >&2
+    exit 1
+fi

@@ -1,0 +1,18 @@
+#!/bin/bash
+# No pushes to main, no force pushes (see AGENTS.md, "Git and GitHub").
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "Push rejected: don't push to main directly. Open a pull request from develop." >&2
+        exit 1
+    fi
+    if [ "$remote_sha" != "$zero" ] && [ "$local_sha" != "$zero" ] \
+        && ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+        echo "Push rejected: this would rewrite history on $remote_ref (force push)." >&2
+        exit 1
+    fi
+    if [ "$local_sha" = "$zero" ]; then
+        echo "Push rejected: deleting remote branch $remote_ref isn't allowed without being asked." >&2
+        exit 1
+    fi
+done
