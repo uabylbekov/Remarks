@@ -563,6 +563,36 @@ struct EditorPresentationTests {
         }
     }
 
+    @Test("Attachment trailing boundary places the caret after the chip while tapping the chip hits attachmentID")
+    func attachmentBoundaryStillPlacesTrailingCaretWithoutSelection() throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let note = Library(context: store.mainContext).createNote(body: "")
+        let attachment = try AttachmentStore(context: store.mainContext).add(
+            data: Data("hello".utf8),
+            fileName: "doc.txt",
+            typeIdentifier: "public.plain-text",
+            to: note
+        )
+        let markdown = AttachmentStore.markdown(for: attachment)
+        let source = markdown + "\nAfter"
+        let (content, preview) = fixture(source)
+        preview.attachmentProvider = { id in
+            guard id == attachment.id else { return nil }
+            return AttachmentDisplay(id: id, isImage: false, fileName: "doc.txt", byteCount: 5, pixelSize: .zero, image: nil, hasData: true)
+        }
+        defer { withExtendedLifetime(preview) {} }
+
+        let manager = try #require(content.textLayoutManagers.first)
+        manager.ensureLayout(for: content.documentRange)
+        let fragment = try #require(manager.textLayoutFragment(for: content.documentRange.location) as? AttachmentFragment)
+        let rect = fragment.attachmentBounds
+        #expect(rect.width > 0 && rect.height > 0)
+
+        #expect(preview.attachmentID(at: CGPoint(x: rect.midX, y: rect.midY)) == attachment.id)
+        let trailingCaret = preview.elementBoundary(at: CGPoint(x: rect.maxX + 4, y: rect.midY))
+        #expect(trailingCaret == NSRange(location: (markdown as NSString).length, length: 0))
+    }
+
     #if canImport(UIKit)
     @Test(arguments: ["```", "```\n", "```\n\n```\n", "```swift\nlet value = 1\n```"])
     func firstCodeCaretIsInsideNativeFragment(source: String) throws {
@@ -1055,6 +1085,90 @@ struct TablePlacementTests {
         #expect(!shown.isHidden, "the table is back in view and must be shown")
         #expect(abs(viewY - roomY) < 0.5, "the table is \(viewY - roomY) points off its room")
     }
+}
+
+@MainActor
+struct DesktopBehaviorTests {
+    private func find<V: NSView>(_ type: V.Type, in view: NSView) -> [V] {
+        ((view as? V).map { [$0] } ?? []) + view.subviews.flatMap { find(type, in: $0) }
+    }
+
+    @Test("Clicking an attachment on macOS opens it immediately without selecting it")
+    func clickingAttachmentOpensImmediatelyWithoutSelection() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let note = Library(context: store.mainContext).createNote(body: "")
+        let attachment = try AttachmentStore(context: store.mainContext).add(
+            data: Data("hello".utf8),
+            fileName: "Spec.pdf",
+            typeIdentifier: "com.adobe.pdf",
+            to: note
+        )
+        note.setBody("Before\n" + AttachmentStore.markdown(for: attachment) + "\nAfter")
+        try store.mainContext.save()
+
+        var openedIDs: [UUID] = []
+        let host = NSHostingView(
+            rootView: NoteEditor(note: note, onOpenAttachment: { openedIDs.append($0.id) })
+                .modelContainer(store)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        )
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        for _ in 0..<8 {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+        }
+
+        let textView = try #require(find(NSTextView.self, in: host).first)
+        let manager = try #require(textView.textLayoutManager)
+        manager.ensureLayout(for: manager.documentRange)
+        var attachmentBounds: CGRect?
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
+            if let af = fragment as? AttachmentFragment {
+                attachmentBounds = af.attachmentBounds
+                return false
+            }
+            return true
+        }
+        let rect = try #require(attachmentBounds)
+        let origin = textView.textContainerOrigin
+        let clickPointInTextView = NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y)
+        let clickPointInWindow = textView.convert(clickPointInTextView, to: nil)
+
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: clickPointInWindow,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: clickPointInWindow,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 0
+        ))
+        #expect(window.contentView?.hitTest(clickPointInWindow) === textView)
+        textView.mouseDown(with: down)
+        textView.mouseUp(with: up)
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(openedIDs == [attachment.id])
+        #expect(textView.selectedRange().length == 0)
+    }
+
 }
 #endif
 

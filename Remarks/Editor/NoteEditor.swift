@@ -404,13 +404,7 @@ private struct NoteTextView: UIViewControllerRepresentable {
                 return
             }
             if let id = attachmentID(for: gesture), let attachment = session.catalog.attachment(with: id) {
-                if let point = containerPoint(for: gesture), let range = session.preview?.attachmentSelection(at: point), textView.selectedRange != range {
-                    textView.selectedRange = range
-                    session.preview?.selectionChanged(to: range)
-                    if session.isEditable { _ = textView.becomeFirstResponder() }
-                } else {
-                    session.onOpenAttachment?(attachment)
-                }
+                session.onOpenAttachment?(attachment)
                 return
             }
             guard session.isEditable,
@@ -839,13 +833,7 @@ private struct NoteTextView: NSViewRepresentable {
                 return true
             }
             if let id = session.preview?.attachmentID(at: point), let attachment = session.catalog.attachment(with: id) {
-                if let range = session.preview?.attachmentSelection(at: point), textView.selectedRange() != range {
-                    textView.setSelectedRange(range)
-                    session.preview?.selectionChanged(to: range)
-                    textView.window?.makeFirstResponder(textView)
-                } else {
-                    session.onOpenAttachment?(attachment)
-                }
+                session.onOpenAttachment?(attachment)
                 return true
             }
             guard session.isEditable,

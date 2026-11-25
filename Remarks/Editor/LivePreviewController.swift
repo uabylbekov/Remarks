@@ -336,13 +336,6 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         let after = activeInlineLines(for: selection, in: source)
         var dirty = (before.filter { !after.contains($0) } + after.filter { !before.contains($0) }).map(\.line)
 
-        let previousAttachment = selectedAttachmentBlockRange(for: previous, in: source)
-        let currentAttachment = selectedAttachmentBlockRange(for: selection, in: source)
-        if previousAttachment != currentAttachment {
-            if let previousAttachment { dirty.append(previousAttachment) }
-            if let currentAttachment { dirty.append(currentAttachment) }
-        }
-
         for item in richItems {
             if richIsEditing(item, selection: previous) != richIsEditing(item, selection: selection) {
                 dirty.append(source.lineRange(for: item.range))
@@ -351,13 +344,6 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         if !dirty.isEmpty { invalidate(dirty) }
         // Synchronize table hosts after selection-driven navigation.
         if !tables.isEmpty { onTablesChanged?() }
-    }
-
-    private func selectedAttachmentBlockRange(for selection: NSRange, in source: NSString) -> NSRange? {
-        guard selection.length > 0, let block = document.block(at: selection.location),
-              case .attachment = block.kind,
-              attachmentRange(of: block, in: source) == selection else { return nil }
-        return block.range
     }
 
     private struct ActiveInline: Equatable {
@@ -1214,33 +1200,12 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
         return NSRange(location: block.range.location, length: end - block.range.location)
     }
 
-    /// Selection belongs to the clicked occurrence, even when a file is referenced more than once.
-    func attachmentSelection(at point: CGPoint) -> NSRange? {
-        guard let layoutManager, let contentStorage, let storage = contentStorage.textStorage,
-              let fragment = layoutManager.textLayoutFragment(for: point) as? AttachmentFragment,
-              fragment.attachmentBounds.contains(point),
-              let location = fragment.textElement?.elementRange?.location else { return nil }
-        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
-        guard let block = document.block(at: offset), case .attachment = block.kind else { return nil }
-        return attachmentRange(of: block, in: storage.string as NSString)
-    }
-
     func attachmentID(in selection: NSRange) -> UUID? {
         guard selection.length > 0, let storage = contentStorage?.textStorage,
               let block = document.block(at: selection.location), case .attachment(let attachment) = block.kind,
               attachmentRange(of: block, in: storage.string as NSString) == selection else { return nil }
         return attachment.id
     }
-
-    /// True when the attachment represented by `element` is the currently selected attachment line.
-    func isAttachmentSelected(for element: NSTextElement?) -> Bool {
-        guard selection.length > 0, let location = element?.elementRange?.location,
-              let contentStorage, let storage = contentStorage.textStorage else { return false }
-        let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
-        guard let block = document.block(at: offset), case .attachment = block.kind else { return false }
-        return attachmentRange(of: block, in: storage.string as NSString) == selection
-    }
-
 
     func attachmentDisplay(for id: UUID) -> AttachmentDisplay? {
         attachmentProvider?(id)

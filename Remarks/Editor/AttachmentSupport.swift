@@ -328,16 +328,6 @@ final class AttachmentFragment: NSTextLayoutFragment {
             drawChip(display, in: rect, context: context)
         }
         context.restoreGState()
-
-        if controller?.isAttachmentSelected(for: textElement) == true {
-            context.saveGState()
-            context.setStrokeColor(EditorTheme.accentColor.cgColor)
-            context.setLineWidth(2)
-            let ring = CGPath(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil)
-            context.addPath(ring)
-            context.strokePath()
-            context.restoreGState()
-        }
     }
 
     // MARK: Image
