@@ -78,7 +78,7 @@ enum InlineStyler {
             case .code:
                 paragraph.addAttributes([
                     .font: EditorTheme.inlineCodeFont(matching: base),
-                    .backgroundColor: EditorTheme.codeBackground,
+                    .foregroundColor: EditorTheme.inlineCodeColor,
                 ], range: span.content)
             case .link:
                 paragraph.addAttributes([

@@ -287,6 +287,9 @@ enum EditorTheme {
     /// The code theme's plain text color, for code that has no token color.
     static var codeTextColor: EditorColor { current.codeTextColor }
 
+    /// Highlight color for inline code spans, drawn from the active code theme without a background box.
+    static var inlineCodeColor: EditorColor { color(for: .keyword) }
+
     static func color(for scope: SyntaxScope) -> EditorColor {
         current.scopeColors[scope] ?? current.codeTextColor
     }

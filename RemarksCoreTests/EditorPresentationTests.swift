@@ -510,6 +510,35 @@ struct EditorPresentationTests {
         #expect(edit.selection.length == 0)
     }
 
+    @Test("Inline code uses the active code font and code theme color without a background box")
+    func inlineCodeUsesCodeFontAndCodeThemeColorWithoutBackground() throws {
+        let original = AppearanceModel.shared.settings
+        defer { AppearanceModel.shared.settings = original }
+
+        let source = "Before `let x = 1` after"
+        let codeRange = (source as NSString).range(of: "let x = 1")
+        for theme in CodeTheme.builtIn {
+            var next = original
+            next.codeThemeID = theme.id
+            AppearanceModel.shared.settings = next
+
+            let (content, preview) = fixture(source)
+            defer { withExtendedLifetime(preview) {} }
+            let paragraph = try #require(
+                preview.textContentStorage(content, textParagraphWith: NSRange(location: 0, length: source.utf16.count))?.attributedString
+            )
+            let font = try #require(paragraph.attribute(.font, at: codeRange.location, effectiveRange: nil) as? EditorFont)
+            let foreground = try #require(paragraph.attribute(.foregroundColor, at: codeRange.location, effectiveRange: nil) as? EditorColor)
+            let background = paragraph.attribute(.backgroundColor, at: codeRange.location, effectiveRange: nil)
+
+            #expect(font.fontName == EditorTheme.inlineCodeFont(matching: EditorTheme.proseFont).fontName)
+            #expect(abs(font.pointSize - EditorTheme.inlineCodeFont(matching: EditorTheme.proseFont).pointSize) < 0.01)
+            #expect(components(foreground) == components(EditorTheme.inlineCodeColor))
+            #expect(components(foreground) == components(EditorTheme.color(for: .keyword)))
+            #expect(background == nil)
+        }
+    }
+
     #if canImport(UIKit)
     @Test(arguments: ["```", "```\n", "```\n\n```\n", "```swift\nlet value = 1\n```"])
     func firstCodeCaretIsInsideNativeFragment(source: String) throws {
@@ -812,6 +841,7 @@ struct EditorPresentationTests {
         #expect(controller.textView.adjustedContentInset.top >= 88)
         #expect(controller.textView.adjustedContentInset.bottom >= 34)
     }
+
     #endif
 }
 
