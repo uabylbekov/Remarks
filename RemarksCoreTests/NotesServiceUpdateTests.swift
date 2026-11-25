@@ -45,6 +45,26 @@ struct NotesServiceUpdateTests {
         #expect(renamed.title == "New name")
     }
 
+    // MARK: Failed saves
+
+    private struct DiskFull: Error {}
+
+    @Test func aFailedSaveDoesNotLeakIntoTheNextSuccessfulSave() async throws {
+        let (service, _) = try makeService()
+        let first = try await service.createNote(text: "original", now: t0)
+        let second = try await service.createNote(text: "other", now: t0)
+
+        await service.setSaveForTesting { _ in throw DiskFull() }
+        await #expect(throws: DiskFull.self) {
+            try await service.append(" lost", to: first.id, now: t0.addingTimeInterval(1))
+        }
+        await service.setSaveForTesting(nil)
+
+        // A later, unrelated call saves the shared context. The failed edit must not ride along.
+        try await service.update(second.id, isPinned: true, now: t0.addingTimeInterval(2))
+        #expect(try await service.text(of: first.id) == "original")
+    }
+
     // MARK: Update
 
     @Test func updateRenamesPinsAndMoves() async throws {

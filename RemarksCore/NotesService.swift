@@ -66,6 +66,24 @@ public enum AppendPosition: String, Sendable, CaseIterable {
 
 @ModelActor
 public actor NotesService {
+    /// Replaces `ModelContext.save()` so tests can make a save fail; a real failure (a full disk) can't be provoked.
+    private var saveOverride: (@Sendable (ModelContext) throws -> Void)?
+
+    func setSaveForTesting(_ save: (@Sendable (ModelContext) throws -> Void)?) {
+        saveOverride = save
+    }
+
+    /// Writes the changes. A failed save leaves its edits in this long-lived context, where the next call's
+    /// successful save would write them although the caller was told they failed.
+    private func commit() throws {
+        do {
+            try (saveOverride ?? { try $0.save() })(modelContext)
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
     // MARK: Create and change
 
     /// Creates a note. `title`, if given, becomes a first-level heading above the text.
@@ -94,7 +112,7 @@ public actor NotesService {
             modelContext.rollback()
             throw error
         }
-        try modelContext.save()
+        try commit()
         return NoteInfo(note)
     }
 
@@ -124,7 +142,7 @@ public actor NotesService {
             modelContext.rollback()
             throw error
         }
-        try modelContext.save()
+        try commit()
         return NoteInfo(note)
     }
 
@@ -179,7 +197,7 @@ public actor NotesService {
         case .end: note.setBody(body + separator + text, now: now)
         case .start: note.setBody(text + (text.hasSuffix("\n") ? "" : "\n") + body, now: now)
         }
-        try modelContext.save()
+        try commit()
         return NoteInfo(note)
     }
 
@@ -188,7 +206,7 @@ public actor NotesService {
         let note = try requireNote(id)
         guard note.deletedAt == nil else { return }
         Library(context: modelContext).trash(note, now: now)
-        try modelContext.save()
+        try commit()
     }
 
     /// Undoes `trash(_:)`.
@@ -196,7 +214,7 @@ public actor NotesService {
         let note = try requireNote(id)
         guard note.deletedAt != nil else { return }
         Library(context: modelContext).restore(note, now: now)
-        try modelContext.save()
+        try commit()
     }
 
     // MARK: Read
