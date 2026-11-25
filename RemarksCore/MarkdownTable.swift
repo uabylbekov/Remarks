@@ -159,3 +159,40 @@ public struct MarkdownTable: Equatable, Sendable {
         return cells
     }
 }
+
+/// Layout metrics for rendered table grids, scaling column widths, cell padding, and action controls with body font size.
+public enum MarkdownTableMetrics: Sendable {
+    public static let cellHorizontalPadding: Double = 10
+    public static let baseFontSize: Double = 17
+    public static let baseMinimumColumnWidth: Double = 80
+    public static let baseMaximumColumnWidth: Double = 320
+
+    public static func fontScale(forFontSize fontSize: Double) -> Double {
+        max(1, fontSize / baseFontSize)
+    }
+
+    public static func menuIconSize(forFontSize fontSize: Double) -> Double {
+        min(24, max(14, ceil(fontSize * 0.85)))
+    }
+
+    public static func menuWidth(forFontSize fontSize: Double) -> Double {
+        menuIconSize(forFontSize: fontSize) + 10
+    }
+
+    public static func minimumColumnWidth(forFontSize fontSize: Double) -> Double {
+        (baseMinimumColumnWidth * fontScale(forFontSize: fontSize)).rounded()
+    }
+
+    public static func maximumColumnWidth(forFontSize fontSize: Double) -> Double {
+        (baseMaximumColumnWidth * fontScale(forFontSize: fontSize)).rounded()
+    }
+
+    public static func columnWidth(textWidth: Double, fontSize: Double) -> Double {
+        let raw = ceil(textWidth) + 2 * cellHorizontalPadding + menuWidth(forFontSize: fontSize) + 8
+        return min(maximumColumnWidth(forFontSize: fontSize), max(minimumColumnWidth(forFontSize: fontSize), raw))
+    }
+
+    public static func rowHeight(fontLineHeight: Double, minimumTouchHeight: Double) -> Double {
+        max(minimumTouchHeight, ceil(fontLineHeight) + 16)
+    }
+}

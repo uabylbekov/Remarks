@@ -1,5 +1,10 @@
 import SwiftUI
 import RemarksCore
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// The user's appearance choices (Spec 11), kept in iCloud key-value storage with a local copy.
 /// Views and the editor read this; changing `settings` saves it and bumps `revision`, which open editors watch.
@@ -35,9 +40,20 @@ final class AppearanceModel {
             }
         })
         #if canImport(UIKit)
-        // The editor's text size follows Dynamic Type (see `EditorTheme`), so an open editor must style again when it changes.
+        // The editor's text size and contrast follow accessibility settings (see `EditorTheme`), so an open editor must style again when they change.
         observerTasks.append(Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIContentSizeCategory.didChangeNotification) {
+                self?.revision += 1
+            }
+        })
+        observerTasks.append(Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: UIAccessibility.darkerSystemColorsStatusDidChangeNotification) {
+                self?.revision += 1
+            }
+        })
+        #elseif canImport(AppKit)
+        observerTasks.append(Task { [weak self] in
+            for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) {
                 self?.revision += 1
             }
         })

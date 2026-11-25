@@ -14,19 +14,19 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リマークス"
+            "value" : "Remarks"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "리마크스"
+            "value" : "Remarks"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批注"
+            "value" : "Remarks"
           }
         }
       }
@@ -44,19 +44,19 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リマークス"
+            "value" : "Remarks"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "리마크스"
+            "value" : "Remarks"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批注"
+            "value" : "Remarks"
           }
         }
       }

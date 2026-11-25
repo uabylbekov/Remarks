@@ -40,7 +40,7 @@ Virtual items (All Notes, Unfiled, Recently Deleted) are queries, not stored dat
 
 - Create (top level or inside a folder), rename, delete, and move notes into folders.
 - Deleting a folder moves it and its subtree and notes to Recently Deleted together, and restoring undoes exactly that (Spec 01).
-- Reordering and moving folders by drag is a follow-up. For now new folders append after their siblings.
+- Folders can be reordered among their siblings by drag, and moved to another parent (or to the top level) with "Move to". A note can be dragged onto a folder. New folders append after their siblings.
 
 ### Tags
 
@@ -78,7 +78,7 @@ Pure and tested in `NotesCore`: `NoteScope`, `NoteFilter` (scope, search, sortin
 
 ## Known gaps and later work
 
-- Drag to reorder or nest folders, and drag notes onto folders.
+- Drag a folder onto another folder to nest it. (Reordering by drag, "Move to", and dropping notes onto folders are built.)
 - Sort options (created, title) and list density.
 - Smart folders (saved searches), inline hashtags, and search operators such as `tag:` or `in:`.
 - A real full-text index. v1 filters in memory, which is fine for thousands of notes. Spotlight indexing in Spec 06 will add system-level search.

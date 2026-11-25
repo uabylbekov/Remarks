@@ -95,6 +95,19 @@ struct AppearanceTests {
         #expect(theme.text.light.contrast(with: theme.background.light) >= 4.5)
         #expect(theme.text.dark.contrast(with: theme.background.dark) >= 4.5)
     }
+
+    @Test("Contrasting foreground picks black on bright backgrounds and white on dark backgrounds")
+    func contrastingForegroundPicksHighContrastInk() {
+        let yellow = RGB(hex: 0xFFD60A)
+        let navy = RGB(hex: 0x0A3069)
+        let black = RGB(hex: 0x000000)
+        let white = RGB(hex: 0xFFFFFF)
+
+        #expect(yellow.contrastingForeground == black)
+        #expect(yellow.contrast(with: yellow.contrastingForeground) >= 4.5)
+        #expect(navy.contrastingForeground == white)
+        #expect(navy.contrast(with: navy.contrastingForeground) >= 4.5)
+    }
 }
 
 /// Spec 11, F2: the code fonts offered in Settings.

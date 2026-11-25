@@ -206,6 +206,8 @@ public enum NoteFilter {
         var titleMatches: [Note] = []
         var otherMatches: [Note] = []
         for note in inScope {
+            // Notes requiring a newer reader version must not have their body read or searched.
+            guard note.isReadable else { continue }
             let tagNames = (note.tags ?? []).map(\.name)
             // The raw Markdown is a quick first check. A match counts only if the word is also in the text a person
             // reads, so attachment ids and link addresses never produce a result with nothing to see. The readable text

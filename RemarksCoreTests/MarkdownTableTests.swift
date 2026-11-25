@@ -123,3 +123,33 @@ struct MarkdownTableTests {
         #expect(table.rows == [["line1 line2"]])
     }
 }
+
+@Suite("Table metrics accessibility scaling")
+struct MarkdownTableMetricsTests {
+    @Test("Menu width stays larger than menu icon size at accessibility font sizes")
+    func menuWidthCoversMenuIconAtAccessibilitySizes() {
+        let fontSize = 53.0
+        let iconSize = MarkdownTableMetrics.menuIconSize(forFontSize: fontSize)
+        let menuWidth = MarkdownTableMetrics.menuWidth(forFontSize: fontSize)
+        #expect(iconSize <= 24)
+        #expect(menuWidth > iconSize)
+    }
+
+    @Test("Column minimum and maximum widths scale proportionally above default body size")
+    func columnWidthsScaleWithLargeText() {
+        let defaultMin = MarkdownTableMetrics.minimumColumnWidth(forFontSize: 17)
+        let largeMin = MarkdownTableMetrics.minimumColumnWidth(forFontSize: 53)
+        let defaultMax = MarkdownTableMetrics.maximumColumnWidth(forFontSize: 17)
+        let largeMax = MarkdownTableMetrics.maximumColumnWidth(forFontSize: 53)
+        #expect(defaultMin == 80)
+        #expect(defaultMax == 320)
+        #expect(largeMin > defaultMin * 2)
+        #expect(largeMax > defaultMax * 2)
+    }
+
+    @Test("Row height honors the minimum touch target at small text sizes and grows for larger text")
+    func rowHeightHonorsTouchTargetAndLargeText() {
+        #expect(MarkdownTableMetrics.rowHeight(fontLineHeight: 20, minimumTouchHeight: 44) == 44)
+        #expect(MarkdownTableMetrics.rowHeight(fontLineHeight: 60, minimumTouchHeight: 44) == 76)
+    }
+}

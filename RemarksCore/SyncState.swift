@@ -66,6 +66,9 @@ public struct SyncState: Sendable, Equatable {
     public private(set) var inFlight = 0
     public private(set) var lastSuccess: Date?
     public private(set) var lastProblem: SyncProblem?
+    /// How many imports from iCloud have finished without a problem. It changes whenever other devices' changes have
+    /// arrived, so code that has to follow what is in the store (Spotlight) can watch it.
+    public private(set) var importCount = 0
 
     public init() {}
 
@@ -82,13 +85,14 @@ public struct SyncState: Sendable, Equatable {
         case .started:
             inFlight += 1
 
-        case .finished(_, let date, let problem):
+        case .finished(let kind, let date, let problem):
             inFlight = max(0, inFlight - 1)
             if let problem {
                 lastProblem = problem
             } else {
                 lastSuccess = date
                 lastProblem = nil
+                if kind == .importing { importCount += 1 }
             }
         }
     }

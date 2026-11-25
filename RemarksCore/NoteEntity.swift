@@ -11,8 +11,11 @@ import CoreTransferable
 public struct AccountEntity {
     public static let defaultQuery = AccountEntityQuery()
 
-    /// Never changes, so saved shortcuts and Siri's memory of the account stay valid.
-    public static let accountID = UUID(uuidString: "5C1B0B3E-6E52-4B33-9B64-0A1B6A52D0A1")!
+    /// Never changes, so saved shortcuts and Siri's memory of the account stay valid. Written as bytes, so there is no
+    /// string to parse. This is 5C1B0B3E-6E52-4B33-9B64-0A1B6A52D0A1.
+    public static let accountID = UUID(uuid: (
+        0x5C, 0x1B, 0x0B, 0x3E, 0x6E, 0x52, 0x4B, 0x33, 0x9B, 0x64, 0x0A, 0x1B, 0x6A, 0x52, 0xD0, 0xA1
+    ))
     public static let shared = AccountEntity()
 
     public let id = AccountEntity.accountID

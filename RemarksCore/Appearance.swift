@@ -36,6 +36,13 @@ public struct RGB: Codable, Equatable, Sendable {
         let (high, low) = (max(luminance, other.luminance), min(luminance, other.luminance))
         return (high + 0.05) / (low + 0.05)
     }
+
+    /// Black or white, whichever yields higher WCAG contrast against this color.
+    public var contrastingForeground: RGB {
+        let white = RGB(hex: 0xFFFFFF)
+        let black = RGB(hex: 0x000000)
+        return contrast(with: white) >= contrast(with: black) ? white : black
+    }
 }
 
 /// A color with a light and a dark variant (Spec 11, T3).

@@ -16,7 +16,14 @@ struct NoteDetailView: View {
     }
 
     var body: some View {
-        if let note = matches.first, !note.isDeleted, note.modelContext != nil {
+        if let note = matches.first, !note.isDeleted, note.modelContext != nil, !note.isReadable {
+            // Written by a newer version of the app. Opening it here could corrupt it, so there is no editor.
+            ContentUnavailableView(
+                "Update Required",
+                systemImage: "arrow.down.app",
+                description: Text("This note needs a newer version of Remarks.")
+            )
+        } else if let note = matches.first, !note.isDeleted, note.modelContext != nil {
             EditorContainer(note: note, onDelete: onDelete)
                 .id(noteID)
                 // Tells Siri and Apple Intelligence which note is on screen, so "add this to my note" has a target.

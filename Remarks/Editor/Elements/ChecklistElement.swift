@@ -121,10 +121,11 @@ final class ChecklistFragment: NSTextLayoutFragment {
         // A circle, as in Apple Notes: a ring while open, a filled disc with a check once done.
         let outline = CGPath(ellipseIn: box.insetBy(dx: 0.75, dy: 0.75), transform: nil)
         if isChecked {
-            context.setFillColor(EditorTheme.accentColor.cgColor)
+            let fillColor = EditorTheme.accentColor
+            context.setFillColor(fillColor.cgColor)
             context.addPath(outline)
             context.fillPath()
-            context.setStrokeColor(EditorColor.white.cgColor)
+            context.setStrokeColor(EditorTheme.contrastingForeground(over: fillColor).cgColor)
             context.setLineWidth(max(1.8, side * 0.11))
             context.setLineCap(.round)
             context.setLineJoin(.round)
@@ -133,8 +134,9 @@ final class ChecklistFragment: NSTextLayoutFragment {
             context.addLine(to: CGPoint(x: box.minX + side * 0.76, y: box.minY + side * 0.30))
             context.strokePath()
         } else {
-            context.setStrokeColor(EditorColor.systemGray.cgColor)
-            context.setLineWidth(1.5)
+            let strokeColor = EditorTheme.increaseContrast ? EditorTheme.baseColor : EditorTheme.dimColor
+            context.setStrokeColor(strokeColor.cgColor)
+            context.setLineWidth(EditorTheme.increaseContrast ? 2.0 : 1.5)
             context.addPath(outline)
             context.strokePath()
         }

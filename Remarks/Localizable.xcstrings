@@ -1492,6 +1492,46 @@
         }
       }
     },
+    "Export Without Them" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ohne Anhänge exportieren"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Exporter sans les pièces jointes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "添付ファイルなしで書き出す"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "첨부 파일 없이 내보내기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "不带附件导出"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "不含附件輸出"
+          }
+        }
+      }
+    },
     "Find Notes" : {
       "localizations" : {
         "de" : {
@@ -2532,6 +2572,46 @@
         }
       }
     },
+    "Needs a newer version of Remarks" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Neuere Version erforderlich"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Nécessite une version plus récente de Remarks"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "新しいバージョンのRemarksが必要です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "새로운 버전의 Remarks가 필요합니다"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "需要较新版本的 Remarks"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "需要較新版本的 Remarks"
+          }
+        }
+      }
+    },
     "New Folder" : {
       "localizations" : {
         "de" : {
@@ -3152,6 +3232,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打開筆記"
+          }
+        }
+      }
+    },
+    "Outdent List" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Listeneinzug verkleinern"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Réduire le retrait de la liste"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "リストのインデントを減らす"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "목록 들여쓰기 줄이기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "减少列表缩进"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "減少列表縮排"
           }
         }
       }
@@ -4162,6 +4282,86 @@
         }
       }
     },
+    "Some Attachments Aren’t Available" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Einige Anhänge sind nicht verfügbar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Certaines pièces jointes ne sont pas disponibles"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "一部の添付ファイルを利用できません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "일부 첨부 파일을 사용할 수 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "部分附件不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "部分附件無法使用"
+          }
+        }
+      }
+    },
+    "Some attachments aren’t on this device yet. They may still be downloading from iCloud. You can export the note without them, or wait and try again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Einige Anhänge sind noch nicht auf diesem Gerät. Möglicherweise werden sie noch aus iCloud geladen. Du kannst die Notiz ohne sie exportieren oder warten und es erneut versuchen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Certaines pièces jointes ne sont pas encore sur cet appareil. Elles sont peut-être en cours de téléchargement depuis iCloud. Vous pouvez exporter la note sans elles, ou patienter et réessayer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "一部の添付ファイルはまだこのデバイスにありません。iCloudからダウンロード中の可能性があります。添付ファイルなしでメモを書き出すか、しばらくしてからやり直してみてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "일부 첨부 파일이 아직 이 기기에 없습니다. iCloud에서 다운로드 중일 수 있습니다. 첨부 파일 없이 노트를 내보내거나 잠시 후 다시 시도해 보세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "部分附件尚未下载到此设备。它们可能仍在从 iCloud 下载。你可以不带附件导出笔记，或稍后再试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "部分附件尚未下載到此裝置。它們可能仍在從 iCloud 下載。你可以不含附件輸出筆記，或稍後再試。"
+          }
+        }
+      }
+    },
     "Standard" : {
       "localizations" : {
         "de" : {
@@ -4762,6 +4962,46 @@
         }
       }
     },
+    "This note needs a newer version of Remarks." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Für diese Notiz wird eine neuere Version von Remarks benötigt."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cette note nécessite une version plus récente de Remarks."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "このメモには、新しいバージョンのRemarksが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "이 노트에는 새로운 버전의 Remarks가 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "这篇笔记需要较新版本的 Remarks。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "這篇筆記需要較新版本的 Remarks。"
+          }
+        }
+      }
+    },
     "This tag will be removed from all notes. Your notes won’t be deleted." : {
       "localizations" : {
         "de" : {
@@ -5238,6 +5478,46 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "更新筆記"
+          }
+        }
+      }
+    },
+    "Update Required" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Update erforderlich"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Mise à jour requise"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "アップデートが必要です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "업데이트 필요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "需要更新"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "需要更新"
           }
         }
       }

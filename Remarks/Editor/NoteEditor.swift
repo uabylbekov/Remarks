@@ -151,7 +151,8 @@ private final class MarkdownUITextView: UITextView {
         return PastedFile(data: data, fileName: "Pasted Image.png", type: .png)
     }
 
-    private static let shortcuts: [(title: String, input: String, flags: UIKeyModifierFlags, name: String)] = [
+    // The titles show in the shortcut list that appears when the Command key is held down.
+    private static let shortcuts: [(title: LocalizedStringResource, input: String, flags: UIKeyModifierFlags, name: String)] = [
         ("Bold", "b", .command, "bold"),
         ("Italic", "i", .command, "italic"),
         ("Inline Code", "e", .command, "inlineCode"),
@@ -164,7 +165,7 @@ private final class MarkdownUITextView: UITextView {
         guard isEditable else { return super.keyCommands }
         let own = Self.shortcuts.map { shortcut in
             let command = UIKeyCommand(
-                title: shortcut.title,
+                title: String(localized: shortcut.title),
                 action: #selector(handleShortcut(_:)),
                 input: shortcut.input,
                 modifierFlags: shortcut.flags,
@@ -700,7 +701,7 @@ private struct NoteTextView: NSViewRepresentable {
         var openURL: OpenURLAction?
         private weak var textView: MarkdownNSTextView?
         private var tableViews: TableViewRegistry?
-        nonisolated(unsafe) private var scrollObserverTask: Task<Void, Never>?
+        private var scrollObserverTask: Task<Void, Never>?
 
         init(note: Note, commands: EditorCommands?, rendersMarkdown: Bool) {
             session = EditorSession(note: note, commands: commands, rendersMarkdown: rendersMarkdown)

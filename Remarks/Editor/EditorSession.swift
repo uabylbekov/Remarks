@@ -39,16 +39,16 @@ final class EditorSession {
     private var pendingAppearance: (revision: Int, colorScheme: ColorScheme)?
     /// The text last loaded into, or saved from, the editor. See `EditorSync`.
     private var baseBody = ""
-    nonisolated(unsafe) private var saveTask: Task<Void, Never>?
-    nonisolated(unsafe) private var undoObserverTasks: [Task<Void, Never>] = []
+    private var saveTask: Task<Void, Never>?
+    private var undoObserverTasks: [Task<Void, Never>] = []
     private var hasPendingEdits = false
     private(set) var isApplyingEdit = false
     private var isAdjustingSelection = false
     private weak var observedUndoManager: UndoManager?
 
-    /// Trashed notes (Recently Deleted) are read-only until restored.
+    /// Trashed notes (Recently Deleted) and notes requiring a newer app version are read-only.
     var isEditable: Bool {
-        !note.isDeleted && note.modelContext != nil && note.deletedAt == nil
+        !note.isDeleted && note.modelContext != nil && note.deletedAt == nil && note.isReadable
     }
 
     var onSaveError: ((String) -> Void)?
@@ -157,7 +157,7 @@ final class EditorSession {
             load()
         } else {
             syncEditability()
-            if !host.isComposing() { followStoredNote(editorText: host.text()) }
+            if note.isReadable, !host.isComposing() { followStoredNote(editorText: host.text()) }
         }
     }
 
@@ -173,7 +173,7 @@ final class EditorSession {
     /// The stored note may have changed under the editor (iCloud, Siri, Shortcuts). Never replace text the
     /// user has typed, and never lose either side (Spec 06).
     private func followStoredNote(editorText: String) {
-        guard !note.isDeleted, note.modelContext != nil else { return }
+        guard !note.isDeleted, note.modelContext != nil, note.isReadable else { return }
         switch EditorSync.decide(editorText: editorText, baseBody: baseBody, incomingBody: note.body) {
         case .keepEditorText:
             // If both sides converged to the same text (e.g. after undo or external sync), advance baseBody
@@ -364,7 +364,7 @@ final class EditorSession {
     func flushSave() {
         saveTask?.cancel()
         saveTask = nil
-        guard let host, !note.isDeleted, note.modelContext != nil else { return }
+        guard let host, !note.isDeleted, note.modelContext != nil, note.isReadable else { return }
         // Don't read uncommitted IME marked text into the model, but still persist any prior committed edits.
         if !host.isComposing() {
             saveIfTyped(host.text())

@@ -59,7 +59,7 @@ final class AttachmentCatalog {
     private var inFlight: Set<UUID> = []
     /// Attachments whose image payload failed to decode; cleared if new data arrives so we never retry in a loop.
     private var failedIDs: Set<UUID> = []
-    nonisolated(unsafe) private var decodeTasks: [UUID: Task<Void, Never>] = [:]
+    private var decodeTasks: [UUID: Task<Void, Never>] = [:]
     /// Called on the main actor when a background thumbnail decode finishes, so the editor redraws the image.
     var onImageDecoded: ((UUID) -> Void)?
     /// The longest side of the cached copy. Enough for a wide text column on a Retina display.
@@ -299,7 +299,8 @@ final class AttachmentFragment: NSTextLayoutFragment {
                 return CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
             }
         }
-        return CGSize(width: min(area.width, 340), height: min(area.height, Self.chipHeight))
+        let maxChipWidth = max(340, ceil(EditorTheme.proseFont.pointSize * 18))
+        return CGSize(width: min(area.width, maxChipWidth), height: min(area.height, Self.chipHeight))
     }
 
     private func visibleRect(in area: CGRect, display: AttachmentDisplay? = nil) -> CGRect {
@@ -359,6 +360,11 @@ final class AttachmentFragment: NSTextLayoutFragment {
         context.addPath(CGPath(roundedRect: chip, cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
         context.fillPath()
 
+        context.setStrokeColor(EditorTheme.separatorColor.cgColor)
+        context.setLineWidth(EditorTheme.increaseContrast ? 1.5 : 0.75)
+        context.addPath(CGPath(roundedRect: chip.insetBy(dx: 0.5, dy: 0.5), cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil))
+        context.strokePath()
+
         let title: String
         let detail: String
         let symbol: String
@@ -378,14 +384,14 @@ final class AttachmentFragment: NSTextLayoutFragment {
         }
 
         let proseSize = EditorTheme.proseFont.pointSize
-        let titleSize = min(20, max(13, proseSize * 0.88))
-        let detailSize = min(16, max(11, proseSize * 0.74))
+        let titleSize = max(13, proseSize * 0.88)
+        let detailSize = max(11, proseSize * 0.74)
         let titleFont = EditorFont.systemFont(ofSize: titleSize, weight: .medium)
         let detailFont = EditorFont.systemFont(ofSize: detailSize)
         let titleHeight = ceil(titleFont.ascender - titleFont.descender + titleFont.leading)
         let detailHeight = ceil(detailFont.ascender - detailFont.descender + detailFont.leading)
 
-        let iconHeight = min(56, max(0, chip.height - 8))
+        let iconHeight = min(chip.width * 0.25, max(0, chip.height - 16))
         let icon = CGRect(x: chip.minX + 12, y: chip.midY - iconHeight / 2, width: iconHeight * 0.85, height: iconHeight)
         let textX = icon.maxX + 10
         let textWidth = max(0, chip.maxX - textX - 12)

@@ -433,6 +433,54 @@ struct EditorPresentationTests {
         session.detach()
     }
 
+    @Test func unreadableNoteSessionCannotOverwriteUpgradedBodyOnDetach() throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let context = store.mainContext
+        let library = Library(context: context)
+        let note = library.createNote(body: "Original")
+        try context.save()
+
+        var editorText = ""
+        var editableStates: [Bool] = []
+        let commands = EditorCommands()
+        let session = EditorSession(note: note, commands: commands, rendersMarkdown: false)
+        session.attach(
+            host: .init(
+                text: { editorText },
+                setText: { editorText = $0 },
+                selection: { NSRange(location: 0, length: 0) },
+                isComposing: { false },
+                applyEdit: { edit in
+                    editorText = (editorText as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+                    return true
+                },
+                undoManager: { nil },
+                applyFont: {},
+                applyBodyStyle: {},
+                setEditable: { editableStates.append($0) },
+                focus: {}
+            ),
+            textLayoutManager: nil
+        )
+
+        // Simulate unsaved local text followed by a synced update from a newer app version.
+        editorText = "Local stale edit"
+        note.setBody("Upgraded format")
+        note.minimumReaderVersion = NoteFormat.supportedReaderVersion + 1
+        session.update(note: note)
+
+        #expect(!session.isEditable)
+        #expect(commands.isReadOnly)
+        #expect(editableStates.last == false)
+        #expect(!session.perform(.bold))
+        #expect(editorText == "Local stale edit")
+
+        session.detach()
+        #expect(note.body == "Upgraded format")
+        let allNotes = try context.fetch(FetchDescriptor<Note>())
+        #expect(allNotes.count == 1)
+    }
+
     @Test func deleteForwardAboveTableStepsToTableBoundaryInsteadOfDeleting() throws {
         let source = "Intro\n| A | B |\n| --- | --- |\n| 1 | 2 |"
         let (_, preview) = fixture(source)

@@ -248,6 +248,39 @@ enum EditorTheme {
         #endif
     }
 
+    /// Whether the system's Increase Contrast accessibility setting is enabled.
+    static var increaseContrast: Bool {
+        #if canImport(UIKit)
+        UIAccessibility.isDarkerSystemColorsEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        #endif
+    }
+
+    /// Hairline border and divider color that strengthens under Increase Contrast.
+    static var separatorColor: EditorColor {
+        if increaseContrast { return baseColor.withAlphaComponent(0.5) }
+        #if canImport(UIKit)
+        return .separator
+        #else
+        return .separatorColor
+        #endif
+    }
+
+    /// White or black foreground guaranteeing high WCAG contrast over `background`.
+    static func contrastingForeground(over background: EditorColor) -> EditorColor {
+        #if canImport(UIKit)
+        let resolved = background.resolvedColor(with: .current)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard resolved.getRed(&r, green: &g, blue: &b, alpha: &a) else { return .white }
+        #else
+        guard let srgb = background.usingColorSpace(.sRGB) else { return .white }
+        let (r, g, b) = (srgb.redComponent, srgb.greenComponent, srgb.blueComponent)
+        #endif
+        let fg = RGB(red: Double(r), green: Double(g), blue: Double(b)).contrastingForeground
+        return EditorColor(red: fg.red, green: fg.green, blue: fg.blue, alpha: 1)
+    }
+
     /// The code theme's background, for code blocks and inline code.
     static var codeBackground: EditorColor { current.codeBackground }
 

@@ -25,6 +25,29 @@ struct SyncStateTests {
         #expect(state(.account(.available)).summary == .upToDate(nil))
     }
 
+    @Test("Each successful import adds one to the import count")
+    func successfulImportsAreCounted() {
+        #expect(SyncState().importCount == 0)
+        let once = state(.started(.importing), .finished(.importing, at: t0, problem: nil))
+        #expect(once.importCount == 1)
+        let twice = state(
+            .started(.importing), .finished(.importing, at: t0, problem: nil),
+            .started(.importing), .finished(.importing, at: t0.addingTimeInterval(60), problem: nil)
+        )
+        #expect(twice.importCount == 2)
+    }
+
+    @Test("Imports that fail, exports, setup, and events that have only started are not counted")
+    func otherSyncEventsAreNotCounted() {
+        let state = state(
+            .started(.importing), .finished(.importing, at: t0, problem: .offline),
+            .started(.exporting), .finished(.exporting, at: t0, problem: nil),
+            .started(.setup), .finished(.setup, at: t0, problem: nil),
+            .started(.importing)
+        )
+        #expect(state.importCount == 0)
+    }
+
     /// The purge deletes for good, so it may only run on a timer when no other copy can exist in iCloud.
     @Test func onlySignedOutAndRestrictedAccountsAreLocalOnly() {
         #expect(SyncAccount.noAccount.isLocalOnly)

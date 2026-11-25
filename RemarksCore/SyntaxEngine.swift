@@ -45,7 +45,7 @@ public struct SyntaxToken: Equatable, Sendable {
     }
 }
 
-public final class SyntaxEngine: @unchecked Sendable {
+public final class SyntaxEngine: Sendable {
     public let grammar: SyntaxGrammar
     private let regex: NSRegularExpression
     private let scopes: [SyntaxScope]

@@ -56,6 +56,8 @@ public struct IncomingFile: Sendable {
 public enum NotesServiceError: Error, Equatable {
     case noteNotFound
     case noteInTrash
+    /// The note was written by a newer version of the app, so this version leaves it alone (`Note.isReadable`).
+    case noteNeedsNewerVersion
     case folderNotFound
     case attachmentFailed(AttachmentError)
 }
@@ -236,27 +238,29 @@ public actor NotesService {
         let found = try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) }))
         // Keep the order that was asked for.
         let byID = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return ids.compactMap { byID[$0] }.filter { $0.deletedAt == nil }.map(NoteInfo.init)
+        return ids.compactMap { byID[$0] }.filter { $0.deletedAt == nil && $0.isReadable }.map(NoteInfo.init)
     }
 
     /// The Markdown of each note that still exists, by id. One fetch, for entities that carry their text.
     public func texts(withIDs ids: [UUID]) throws -> [UUID: String] {
         guard !ids.isEmpty else { return [:] }
         let found = try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) }))
-        return Dictionary(found.filter { $0.deletedAt == nil }.map { ($0.id, $0.body) }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(found.filter { $0.deletedAt == nil && $0.isReadable }.map { ($0.id, $0.body) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Every note that is not in Recently Deleted. For Spotlight indexing, which only keeps titles and previews.
+    /// Every note that is not in Recently Deleted and that this version can read. For Spotlight indexing, which only keeps
+    /// titles and previews.
     public func liveNotes() throws -> [NoteInfo] {
-        try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil })).map(NoteInfo.init)
+        try readableLiveNotes().map(NoteInfo.init)
     }
 
     /// The most recently changed notes, pinned first. Bounded, so it is cheap to call often.
     public func recentNotes(limit: Int = 20) throws -> [NoteInfo] {
         // A fetch limit of 0 means "no limit" to SwiftData, so ask for nothing explicitly.
         guard limit > 0 else { return [] }
+        let supported = NoteFormat.supportedReaderVersion
         var descriptor = FetchDescriptor<Note>(
-            predicate: #Predicate { $0.deletedAt == nil },
+            predicate: #Predicate { $0.deletedAt == nil && $0.minimumReaderVersion <= supported },
             sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
         )
         descriptor.fetchLimit = limit
@@ -265,7 +269,7 @@ public actor NotesService {
 
     /// Same matching and ranking as the app's search (Spec 04).
     public func search(_ query: String, scope: NoteScope = .all, limit: Int = 50) throws -> [NoteInfo] {
-        let live = try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil }))
+        let live = try readableLiveNotes()
         // An intent that names a scope means it, so the search stays inside it (the app's list widens to everywhere).
         return NoteFilter.apply(to: live, scope: scope, query: query, searchEverywhere: false)
             .prefix(max(0, limit))
@@ -280,7 +284,7 @@ public actor NotesService {
         limit: Int? = nil
     ) throws -> [NoteInfo] {
         if let limit, limit <= 0 { return [] }
-        let live = try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil }))
+        let live = try readableLiveNotes()
         let matching = live.filter { note in
             guard !conditions.isEmpty else { return true }
             return matchAll ? conditions.allSatisfy { $0.matches(note) } : conditions.contains { $0.matches(note) }
@@ -304,7 +308,7 @@ public actor NotesService {
             FolderInfo(
                 id: folder.id,
                 name: folder.name,
-                noteCount: (folder.notes ?? []).filter { $0.deletedAt == nil }.count,
+                noteCount: (folder.notes ?? []).filter { $0.deletedAt == nil && $0.isReadable }.count,
                 parentID: folder.parent?.id,
                 parentName: folder.parent?.name
             )
@@ -322,7 +326,16 @@ public actor NotesService {
         var descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
         guard let note = try modelContext.fetch(descriptor).first else { throw NotesServiceError.noteNotFound }
+        guard note.isReadable else { throw NotesServiceError.noteNeedsNewerVersion }
         return note
+    }
+
+    /// The notes that are not in Recently Deleted and that this version of the app can read.
+    private func readableLiveNotes() throws -> [Note] {
+        let supported = NoteFormat.supportedReaderVersion
+        return try modelContext.fetch(FetchDescriptor<Note>(predicate: #Predicate {
+            $0.deletedAt == nil && $0.minimumReaderVersion <= supported
+        }))
     }
 
     private func requireFolder(_ id: UUID) throws -> Folder {

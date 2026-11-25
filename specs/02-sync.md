@@ -26,7 +26,7 @@ Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 
 | ID | Requirement |
 |---|---|
-| Y1 | Use SwiftData with an explicit `ModelConfiguration(cloudKitDatabase: .private("iCloud.io.github.uabylbekov.notes"))`. One shared factory in `NotesCore` creates the container |
+| Y1 | Use SwiftData with an explicit `ModelConfiguration(cloudKitDatabase: .private("iCloud.io.github.uabylbekov.remarks"))`. One shared factory in `NotesCore` creates the container |
 | Y2 | The app works with no iCloud account, no network, and iCloud restricted. Data stays local and syncs later |
 | Y3 | Sync status is visible: account state, "syncing", "up to date at HH:MM", and errors with a plain-language explanation |
 | Y4 | After every **import** that finishes, run the dedupe pass from Spec 01 (duplicate tags and duplicate IDs) |
@@ -51,18 +51,18 @@ Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 | Y3 | Sync status bar in the sidebar (signed out, offline, syncing, up to date, storage full, other problems), with a tap for the full explanation | Done. State machine unit-tested. Live wiring needs device testing |
 | Y4 | Duplicate tags and notes are merged after every finished import | Done. Cleanup logic tested. Trigger needs device testing |
 | Y5 | Account change or sign-out explanation before data changes | **Not built.** Platform behavior still unverified |
-| Y6 | Settings through `NSUbiquitousKeyValueStore` | Not built (Spec 11) |
+| Y6 | Settings through `NSUbiquitousKeyValueStore` | Done (Spec 11). The key-value entitlement is set, and the merge (the iCloud copy wins over the local one) is unit-tested. **Not verified between two devices** |
 | Y7 | Large note "not synced" warning | Not built |
 | Purge | Items 30 days in Recently Deleted are deleted for good, at most once a day. iCloud is the source of truth: with an iCloud account the purge only follows a successful import, never a timer, so an offline device cannot delete from stale state. Signed out or restricted accounts (`SyncAccount.isLocalOnly`) have no other copy, so a timer runs the purge instead. A failed pass is retried | Rule tested. Wiring in `MyApp.swift` needs device testing |
 | Schema | `-InitializeCloudKitSchema` launch argument (DEBUG only) runs `initializeCloudKitSchema` before the container opens | Written and compiles. **Not yet run on a device** |
 
 ## Release checklist: CloudKit schema (do once before the first TestFlight or App Store build)
 
-1. In the CloudKit Console, **Reset Development Environment** for `iCloud.io.github.uabylbekov.notes`, to remove the spike's throwaway records and record types.
+1. In the CloudKit Console, **Reset Development Environment** for `iCloud.io.github.uabylbekov.remarks`, only if it holds throwaway records or record types. (The spike used an older container, `iCloud.io.github.uabylbekov.notes`.)
 2. In Xcode, edit the Notes scheme, Run, Arguments, and add `-InitializeCloudKitSchema`.
 3. Run a **debug** build on a device signed into iCloud. Watch the console for `CloudKit schema initialized.`
 4. Remove the launch argument.
-5. In the CloudKit Console, development environment, confirm `CD_Note`, `CD_Folder`, and `CD_Tag` exist with every field, including `deletedAt`.
+5. In the CloudKit Console, development environment, confirm `CD_Note`, `CD_Folder`, `CD_Tag`, and `CD_Attachment` exist with every field, including `deletedAt`.
 6. **Deploy Schema Changes to Production.** After this the schema is additive-only.
 7. Archive and test a build that uses the production environment (TestFlight) on two devices before any wider release.
 

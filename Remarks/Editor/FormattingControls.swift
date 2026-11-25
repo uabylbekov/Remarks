@@ -179,6 +179,7 @@ struct KeyboardFormattingBar: View {
     let perform: (MarkdownCommand) -> Void
     let attach: (AttachmentSource) -> Void
     let dismiss: () -> Void
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     private var formattingDisabled: Bool {
         commands?.isEditingTableCell == true || commands?.isReadOnly == true
@@ -196,7 +197,12 @@ struct KeyboardFormattingBar: View {
                                 .background {
                                     if active {
                                         Circle()
-                                            .fill(.tint.opacity(0.16))
+                                            .fill(.tint.opacity(colorSchemeContrast == .increased ? 0.28 : 0.16))
+                                            .overlay {
+                                                if colorSchemeContrast == .increased {
+                                                    Circle().strokeBorder(.tint, lineWidth: 1.5)
+                                                }
+                                            }
                                             .padding(4)
                                     }
                                 }
@@ -222,6 +228,8 @@ struct KeyboardFormattingBar: View {
         .buttonStyle(.plain)
         .menuStyle(.button)
         .font(.title3)
+        // Keep accessory icons within the 44pt bar targets even when AX1–AX5 text sizes are active.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .foregroundStyle(.primary)
         .padding(.horizontal, 8)
         .padding(.bottom, 8)

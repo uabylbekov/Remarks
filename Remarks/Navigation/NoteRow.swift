@@ -8,6 +8,7 @@ struct NoteRow: View {
     let note: Note
     let now: Date
     @Environment(\.calendar) private var calendar
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The search text. Matching words are highlighted in the title and preview.
     let query: String
     /// Shows the folder name, for lists that mix folders (All Notes and search results).
@@ -16,6 +17,9 @@ struct NoteRow: View {
     let showsPin: Bool
     /// Uses `deletedAt` instead of `modifiedAt` for rows in Recently Deleted.
     var showsDeletedDate = false
+
+    /// At accessibility text sizes the row's lines wrap instead of being cut off at one line.
+    private var wrapsText: Bool { dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         if !note.isDeleted, note.modelContext != nil {
@@ -32,17 +36,22 @@ struct NoteRow: View {
                         }
                         titleView(words: searchWords)
                             .font(.headline)
-                            .lineLimit(1)
+                            .lineLimit(wrapsText ? 2 : 1)
                     }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // At accessibility text sizes the date and the preview no longer fit side by side, so the date goes
+                    // above the preview, which may then take more lines instead of being cut off.
+                    let dateAndPreview = wrapsText
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                        : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
+                    dateAndPreview {
                         Text(Self.dateText(for: displayDate, now: now, calendar: calendar))
                             .layoutPriority(1)
                         previewView(words: searchWords)
                             .foregroundStyle(.secondary)
                     }
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .lineLimit(wrapsText ? 3 : 1)
 
                     if showsFolder, let folder = note.folder, !folder.isDeleted, folder.modelContext != nil {
                         Label {
@@ -52,13 +61,14 @@ struct NoteRow: View {
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(wrapsText ? 2 : 1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // A picture at the very start of the note shows at the end of its row, as in Apple Notes.
-                if let imageID = NoteText.leadingImageID(in: note.body) {
+                // A picture at the very start of the note shows at the end of its row, as in Apple Notes. The text of a
+                // note that needs a newer version is not read at all.
+                if note.isReadable, let imageID = NoteText.leadingImageID(in: note.body) {
                     NoteThumbnail(note: note, imageID: imageID)
                         .id(imageID)
                 }
@@ -80,6 +90,18 @@ struct NoteRow: View {
 
     @ViewBuilder
     private func previewView(words: [String]) -> some View {
+        if !note.isReadable {
+            // Stronger than the other previews: this says why the note will not open.
+            // `Color.primary`, not the `.primary` style: that one would resolve against the `.secondary` set around it.
+            Text("Needs a newer version of Remarks")
+                .foregroundStyle(Color.primary)
+        } else {
+            readablePreview(words: words)
+        }
+    }
+
+    @ViewBuilder
+    private func readablePreview(words: [String]) -> some View {
         let text = words.isEmpty
             ? note.snippet
             : (NoteSearch.snippet(in: note.body, query: query, skippingTitleLine: true) ?? note.snippet)
