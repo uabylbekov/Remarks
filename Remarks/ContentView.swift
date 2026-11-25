@@ -9,12 +9,7 @@ struct ContentView: View {
     /// start on the folder list. `restorePlace()` selects one where the columns show side by side.
     @State private var scope: NoteScope?
     @State private var selectedNoteID: UUID?
-    /// Where this window was looking and which note it had open, kept per window so a relaunch comes back to them. These
-    /// only remember: `scope` and `selectedNoteID` are the live values. A list selection reads its binding straight after
-    /// setting it, and `@SceneStorage` does not give the new value back at once, so the selection would snap back. A note
-    /// or folder that has since gone is dropped by the list and the sidebar when they load.
-    @SceneStorage("window.scope") private var storedScope = NoteScope.all.storageKey
-    @SceneStorage("window.note") private var storedNoteID = ""
+    @State private var draft: DraftNote?
     @State private var didRestorePlace = false
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var errorMessage: String?
@@ -32,40 +27,94 @@ struct ContentView: View {
     /// Puts the window back where it was, once, unless a request to open a note got there first.
     /// When the layout is one column at a time, it starts on the folder list instead: restoring a folder or note would
     /// open straight into it.
-    private func restorePlace() {
+    private func restorePlace(storedScope: NoteScope, storedNoteID: UUID?) {
         guard !didRestorePlace else { return }
         didRestorePlace = true
         guard horizontalSizeClass != .compact else {
             preferredColumn = .sidebar
             return
         }
-        scope = NoteScope(storageKey: storedScope) ?? .all
-        selectedNoteID = UUID(uuidString: storedNoteID)
+        scope = storedScope
+        selectedNoteID = storedNoteID
+    }
+
+    private func draftNote(withID id: UUID) -> Note? {
+        let matches = (try? context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == id }))) ?? []
+        guard let note = matches.first, !note.isDeleted, note.modelContext != nil, note.deletedAt == nil else {
+            return nil
+        }
+        return note
+    }
+
+    /// Dismisses the active draft permanently (never sending it to Recently Deleted) if it is still empty,
+    /// or graduates it to a committed note once it holds content. Returns true when the draft was deleted.
+    @discardableResult
+    private func settleDraftNote(ifMatching outgoingID: UUID?) -> Bool {
+        guard let draftID = draft?.id, outgoingID == draftID else { return false }
+        draft = nil
+        guard let note = draftNote(withID: draftID), note.isEmpty else { return false }
+        withAnimation {
+            context.delete(note)
+            try? context.save()
+        }
+        return true
     }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredColumn) {
             SidebarView(
                 selection: $scope,
-                asksNewFolder: $asksNewFolder
-            ) { id in
-                switch scope {
-                case .folder, .unfiled, .all, .tag:
-                    break
-                case .trash, nil:
-                    scope = .all
+                asksNewFolder: $asksNewFolder,
+                openNote: { id in
+                    settleDraftNote(ifMatching: draft?.id)
+                    let place: NoteScope
+                    switch scope {
+                    case .folder, .unfiled, .all, .tag:
+                        place = scope ?? .all
+                    case .trash, nil:
+                        place = .all
+                    }
+                    scope = place
+                    draft = DraftNote(id: id, scope: place)
+                    selectedNoteID = id
+                    preferredColumn = .detail
+                },
+                onWillTrashFolder: { folder in
+                    if let draftID = draft?.id,
+                       draftNote(withID: draftID).flatMap(\.folder).map({ $0.id == folder.id || Library.isDescendant($0, of: folder) }) == true,
+                       settleDraftNote(ifMatching: draftID),
+                       selectedNoteID == draftID {
+                        selectedNoteID = nil
+                    }
                 }
-                selectedNoteID = id
-                preferredColumn = .detail
-            }
+            )
             #if os(macOS)
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
             #endif
         } content: {
-            NoteListView(scope: scope ?? .all, selectedNoteID: $selectedNoteID)
-                #if os(macOS)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 420)
-                #endif
+            #if os(iOS)
+            Group {
+                if let scope {
+                    NoteListView(
+                        scope: scope,
+                        selectedNoteID: $selectedNoteID,
+                        onWillCreateNote: { settleDraftNote(ifMatching: draft?.id) },
+                        onCreatedNote: { draft = DraftNote(id: $0, scope: scope ?? .all) }
+                    )
+                    .id(scope)
+                } else {
+                    Color.clear
+                }
+            }
+            #else
+            NoteListView(
+                scope: scope ?? .all,
+                selectedNoteID: $selectedNoteID,
+                onWillCreateNote: { settleDraftNote(ifMatching: draft?.id) },
+                onCreatedNote: { draft = DraftNote(id: $0, scope: scope ?? .all) }
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 420)
+            #endif
         } detail: {
             Group {
                 if let selectedNoteID {
@@ -122,20 +171,38 @@ struct ContentView: View {
         // The list keeps a selection only if that note is in the list, so changing the scope here is enough.
         .onChange(of: router.pendingNoteID, initial: true) { _, noteID in
             guard let noteID else { return }
+            settleDraftNote(ifMatching: draft?.id)
             didRestorePlace = true
             scope = .all
             selectedNoteID = noteID
             preferredColumn = .detail
             router.didOpen()
         }
-        .task { restorePlace() }
+        .background {
+            ScenePlaceStorage(scope: scope, selectedNoteID: selectedNoteID, onRestore: restorePlace)
+        }
         // A window that starts one column wide has no place selected. When it widens (Split View, Stage Manager, rotation)
         // the sidebar would have nothing selected next to the list, so it gets the default place.
         .onChange(of: horizontalSizeClass) {
             if horizontalSizeClass != .compact, scope == nil { scope = .all }
         }
-        .onChange(of: scope) { storedScope = scope?.storageKey ?? "" }
-        .onChange(of: selectedNoteID) { storedNoteID = selectedNoteID?.uuidString ?? "" }
+        .onChange(of: scope) { oldScope, newScope in
+            guard oldScope != nil, oldScope != newScope else { return }
+            if let draft, draft.isLeft(whenScopeBecomes: newScope), settleDraftNote(ifMatching: draft.id),
+               selectedNoteID == draft.id {
+                selectedNoteID = nil
+            }
+        }
+        .onChange(of: selectedNoteID) { oldID, newID in
+            guard oldID != newID else { return }
+            settleDraftNote(ifMatching: oldID)
+        }
+        .onChange(of: preferredColumn) { oldColumn, newColumn in
+            if horizontalSizeClass == .compact, oldColumn == .detail, newColumn != .detail,
+               let draftID = draft?.id, settleDraftNote(ifMatching: draftID), selectedNoteID == draftID {
+                selectedNoteID = nil
+            }
+        }
     }
 
     #if os(macOS)
@@ -157,8 +224,12 @@ struct ContentView: View {
         guard !hasEmptyNoteInNewNoteTarget else { return }
         let target = newNoteTargetScope
         do {
-            let note = try Library(context: context).createNote(in: target)
+            settleDraftNote(ifMatching: draft?.id)
+            let note = try withAnimation {
+                try Library(context: context).createNote(in: target)
+            }
             try context.save()
+            draft = DraftNote(id: note.id, scope: target)
             scope = target
             selectedNoteID = note.id
             preferredColumn = .detail
@@ -168,6 +239,31 @@ struct ContentView: View {
         }
     }
     #endif
+}
+
+/// Persists the active window's folder and note selection in `@SceneStorage` without invalidating `ContentView` on
+/// every selection change during navigation transitions.
+private struct ScenePlaceStorage: View {
+    @SceneStorage("window.scope") private var storedScope = NoteScope.all.storageKey
+    @SceneStorage("window.note") private var storedNoteID = ""
+    let scope: NoteScope?
+    let selectedNoteID: UUID?
+    let onRestore: (NoteScope, UUID?) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task {
+                onRestore(NoteScope(storageKey: storedScope) ?? .all, UUID(uuidString: storedNoteID))
+            }
+            .onChange(of: scope) { _, newScope in
+                storedScope = newScope?.storageKey ?? ""
+            }
+            .onChange(of: selectedNoteID) { _, newNoteID in
+                storedNoteID = newNoteID?.uuidString ?? ""
+            }
+    }
 }
 
 #Preview {

@@ -71,6 +71,8 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 6.3 | Search "cafe" with a note titled "Café" | It is found; the All Notes / Here switch works |
 | 6.4 | Rotate the iPad (or resize the Mac window) | Columns adapt |
 | 6.5 | Settings, Accessibility, Display & Text Size, Larger Text: turn on Larger Accessibility Sizes and drag to a large size. Open the note list | Each row shows the title, then the date, then the preview below it, and the preview wraps to up to three lines instead of ending in "…". At normal sizes the date and preview are on one line, as before |
+| 6.6 | Mac: select Recently Deleted, then choose File, New Note (⌘N) | A new empty note opens in All Notes and stays. It is not deleted when the window moves to All Notes |
+| 6.7 | Create a new note, type nothing, then open another note (or go back on iPhone). Look in Recently Deleted | The empty note is gone and is not in Recently Deleted. A new note that has text stays |
 
 ## 7. Attachments (Spec 07)
 

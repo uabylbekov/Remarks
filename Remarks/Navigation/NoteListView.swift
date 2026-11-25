@@ -12,6 +12,8 @@ import RemarksCore
 struct NoteListView: View {
     let scope: NoteScope
     @Binding var selectedNoteID: UUID?
+    var onWillCreateNote: () -> Void = {}
+    var onCreatedNote: (UUID) -> Void = { _ in }
 
     @Query private var folders: [Folder]
     @Query(sort: \Tag.name) private var tags: [Tag]
@@ -91,25 +93,18 @@ struct NoteListView: View {
             scope: scope,
             selectedNoteID: $selectedNoteID,
             title: title,
-            folders: liveFolders,
+            hasDeletedFolders: liveFolders.contains { $0.deletedAt != nil },
+            searchField: searchField,
             query: appliedQuery,
             clearSearch: clearSearch,
             isSearching: isSearching,
-            searchEverywhere: searchEverywhere,
-            widenedToAllNotes: searchEverywhere && isSearching
+            searchEverywhere: $searchEverywhere,
+            showsSearchScopes: showsSearchScopes,
+            widenedToAllNotes: searchEverywhere && isSearching,
+            onWillCreateNote: onWillCreateNote,
+            onCreatedNote: onCreatedNote
         )
         .onChange(of: scope) { clearSearch() }
-        .searchable(text: searchField, prompt: "Search notes")
-        #if os(iOS)
-        .searchPresentationToolbarBehavior(.avoidHidingContent)
-        .toolbarVisibility(.visible, for: .bottomBar)
-        #endif
-        .searchScopes($searchEverywhere) {
-            if showsSearchScopes {
-                Text("All Notes").tag(true)
-                title.tag(false)
-            }
-        }
     }
 }
 
@@ -128,12 +123,16 @@ private struct NoteResultsList: View {
     let scope: NoteScope
     @Binding var selectedNoteID: UUID?
     let title: Text
-    let folders: [Folder]
+    let hasDeletedFolders: Bool
+    let searchField: Binding<String>
     /// The search the list shows, which follows the field a moment after typing stops.
     let searchText: String
     let clearSearch: () -> Void
     let isSearching: Bool
-    let searchEverywhere: Bool
+    @Binding var searchEverywhere: Bool
+    let showsSearchScopes: Bool
+    let onWillCreateNote: () -> Void
+    let onCreatedNote: (UUID) -> Void
 
     @Environment(\.modelContext) private var context
     @Environment(\.calendar) private var calendar
@@ -146,6 +145,9 @@ private struct NoteResultsList: View {
     @State private var confirmsEmptyTrash = false
     @State private var errorMessage: String?
     @State private var now = Date.now
+    #if os(macOS)
+    @State private var settledScope: NoteScope?
+    #endif
 
     private var library: Library { Library(context: context) }
 
@@ -165,21 +167,29 @@ private struct NoteResultsList: View {
         scope: NoteScope,
         selectedNoteID: Binding<UUID?>,
         title: Text,
-        folders: [Folder],
+        hasDeletedFolders: Bool,
+        searchField: Binding<String>,
         query: String,
         clearSearch: @escaping () -> Void,
         isSearching: Bool,
-        searchEverywhere: Bool,
-        widenedToAllNotes: Bool
+        searchEverywhere: Binding<Bool>,
+        showsSearchScopes: Bool,
+        widenedToAllNotes: Bool,
+        onWillCreateNote: @escaping () -> Void,
+        onCreatedNote: @escaping (UUID) -> Void
     ) {
         self.scope = scope
         self._selectedNoteID = selectedNoteID
         self.title = title
-        self.folders = folders
+        self.hasDeletedFolders = hasDeletedFolders
+        self.searchField = searchField
         self.searchText = query
         self.clearSearch = clearSearch
         self.isSearching = isSearching
-        self.searchEverywhere = searchEverywhere
+        self._searchEverywhere = searchEverywhere
+        self.showsSearchScopes = showsSearchScopes
+        self.onWillCreateNote = onWillCreateNote
+        self.onCreatedNote = onCreatedNote
         // The rows only need titles, previews, and dates. A search also reads the bodies.
         _pinned = Query(scope.fetchDescriptor(isPinned: true, widenedToAllNotes: widenedToAllNotes, includesBody: isSearching))
         _unpinned = Query(scope.fetchDescriptor(isPinned: false, widenedToAllNotes: widenedToAllNotes, includesBody: isSearching))
@@ -215,7 +225,7 @@ private struct NoteResultsList: View {
             loaded.contains { $0.id == id }
         } ?? true
 
-        noteList(results: currentResults, pinned: currentPinned, unpinned: currentUnpinned, now: now)
+        noteList(results: currentResults, loaded: loaded, pinned: currentPinned, unpinned: currentUnpinned, now: now)
             // The headings and the dates in the rows are by calendar day, so the list only has to be rebuilt at midnight.
             // Rebuilding it on a timer has the table lay its rows out again while the notes are being edited.
             .task {
@@ -229,8 +239,24 @@ private struct NoteResultsList: View {
             }
     }
 
-    private func noteList(results: [Note], pinned: [Note], unpinned: [Note], now: Date) -> some View {
-        List(selection: $selectedNoteID) {
+    private func listSelection(loaded: [Note]) -> Binding<UUID?> {
+        Binding(
+            get: { selectedNoteID },
+            set: { newValue in
+                #if os(macOS)
+                if newValue == nil,
+                   let current = selectedNoteID,
+                   loaded.contains(where: { $0.id == current }) {
+                    return
+                }
+                #endif
+                selectedNoteID = newValue
+            }
+        )
+    }
+
+    private func noteList(results: [Note], loaded: [Note], pinned: [Note], unpinned: [Note], now: Date) -> some View {
+        List(selection: listSelection(loaded: loaded)) {
             if scope == .trash && !results.isEmpty {
                 Text("Notes are permanently deleted after \(Library.trashRetentionDays) days.")
                     .font(.footnote)
@@ -269,16 +295,35 @@ private struct NoteResultsList: View {
                 #endif
             }
         }
+        #if os(macOS)
+        .animation(!isSearching && settledScope == scope ? .default : nil, value: loaded.map(\.id))
+        .task(id: scope) {
+            await Task.yield()
+            settledScope = scope
+        }
+        #else
+        .animation(!isSearching ? .default : nil, value: loaded.map(\.id))
+        #endif
         .navigationTitle(title)
         #if os(macOS)
         // As in Apple Notes, the title carries the number of notes under it.
         .navigationSubtitle(Text("^[\(results.count) note](inflect: true)"))
         #endif
+        .searchable(text: searchField, prompt: "Search notes")
+        #if os(iOS)
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
+        #endif
+        .searchScopes($searchEverywhere) {
+            if showsSearchScopes {
+                Text("All Notes").tag(true)
+                title.tag(false)
+            }
+        }
         .toolbar {
             if scope == .trash {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Empty Recently Deleted", systemImage: "trash.slash") { confirmsEmptyTrash = true }
-                        .disabled(pinned.isEmpty && unpinned.isEmpty && !folders.contains { $0.deletedAt != nil })
+                        .disabled(pinned.isEmpty && unpinned.isEmpty && !hasDeletedFolders)
                 }
             } else {
                 #if os(macOS)
@@ -329,7 +374,17 @@ private struct NoteResultsList: View {
         } message: { message in
             Text(verbatim: message)
         }
+        #if os(iOS)
+        .background {
+            NoteListScrollPreserver()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        #endif
         #if os(macOS)
+        .background {
+            NoteListSelectionLock(allowsEmptySelection: results.isEmpty || selectedNoteID == nil)
+        }
         .onDeleteCommand {
             if let note = results.first(where: { !$0.isDeleted && $0.modelContext != nil && $0.id == selectedNoteID }) {
                 if note.deletedAt != nil {
@@ -419,9 +474,13 @@ private struct NoteResultsList: View {
 
     private func addNote() {
         guard !hasEmptyNote else { return }
+        onWillCreateNote()
         do {
-            let note = try library.createNote(in: scope)
+            let note = try withAnimation {
+                try library.createNote(in: scope)
+            }
             try context.save()
+            onCreatedNote(note.id)
             // A new empty note cannot match an active text search.
             clearSearch()
             selectedNoteID = note.id
@@ -475,6 +534,233 @@ private enum GroupedNoteRow: Identifiable {
         switch self {
         case .heading(let heading): .heading(heading)
         case .note(let item): .note(item.id)
+        }
+    }
+}
+
+import AppKit
+
+/// Keeps the AppKit table backing `NoteResultsList` from clearing row selection
+/// when clicking empty space below the rows.
+private struct NoteListSelectionLock: NSViewRepresentable {
+    let allowsEmptySelection: Bool
+
+    func makeNSView(context: Context) -> ProbeView {
+        ProbeView(allowsEmptySelection: allowsEmptySelection)
+    }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.allowsEmptySelection = allowsEmptySelection
+        nsView.syncTableView()
+        Task { @MainActor [weak nsView] in
+            nsView?.syncTableView()
+        }
+    }
+
+    final class ProbeView: NSView {
+        var allowsEmptySelection: Bool
+        private weak var observedTable: NSTableView?
+        private var selectionRuleObservation: NSKeyValueObservation?
+
+        init(allowsEmptySelection: Bool) {
+            self.allowsEmptySelection = allowsEmptySelection
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        deinit {
+            selectionRuleObservation?.invalidate()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            syncTableView()
+            attachWhenReady()
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            syncTableView()
+        }
+
+        override func layout() {
+            super.layout()
+            syncTableView()
+        }
+
+        override func viewWillDraw() {
+            super.viewWillDraw()
+            syncTableView()
+        }
+
+        private func attachWhenReady() {
+            guard window != nil, observedTable == nil else { return }
+            Task { @MainActor [weak self] in
+                for _ in 0..<6 {
+                    await Task.yield()
+                    guard let self, self.window != nil else { return }
+                    self.syncTableView()
+                    if self.observedTable != nil { return }
+                }
+            }
+        }
+
+        func syncTableView() {
+            guard let tableView = enclosingNoteListTableView() else { return }
+            if observedTable !== tableView {
+                observedTable = tableView
+                selectionRuleObservation?.invalidate()
+                selectionRuleObservation = tableView.observe(\.allowsEmptySelection, options: [.new]) { [weak self] table, _ in
+                    Task { @MainActor [weak self, weak table] in
+                        guard let self, let table, table === self.observedTable,
+                              table.allowsEmptySelection != self.allowsEmptySelection else { return }
+                        table.allowsEmptySelection = self.allowsEmptySelection
+                    }
+                }
+            }
+            if tableView.allowsEmptySelection != allowsEmptySelection {
+                tableView.allowsEmptySelection = allowsEmptySelection
+            }
+        }
+
+        private func enclosingNoteListTableView() -> NSTableView? {
+            var cursor: NSView? = self
+            while let current = cursor {
+                if current is NSSplitView { break }
+                if let table = Self.findNoteTableView(in: current) {
+                    return table
+                }
+                cursor = current.superview
+            }
+            return nil
+        }
+
+        private static func findNoteTableView(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView, table.effectiveStyle != .sourceList {
+                return table
+            }
+            for subview in view.subviews {
+                if subview is NSSplitView { continue }
+                if let found = findNoteTableView(in: subview) {
+                    return found
+                }
+            }
+            return nil
+        }
+    }
+}
+#endif
+
+#if os(iOS)
+import UIKit
+
+/// Preserves the note list's scroll offset across navigation pushes/pops.
+/// On iOS 26+, returning from an editor without a bottom bar causes UIKit to transiently drop the
+/// list's bottom safe-area inset (from the bottom search bar/toolbar) before restoring it, which
+/// clamps `UICollectionView.contentOffset` upward when scrolled near the bottom.
+private struct NoteListScrollPreserver: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ uiViewController: Controller, context: Context) {}
+
+    final class Controller: UIViewController {
+        private var savedOffsetY: CGFloat?
+        private var savedSafeBottom: CGFloat = 0
+        private var isRestoring = false
+
+        override func loadView() {
+            let v = UIView()
+            v.isUserInteractionEnabled = false
+            v.backgroundColor = .clear
+            view = v
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            // Capture only when a detail view is pushed over this list (not when the list itself is popped).
+            guard let parent, !parent.isMovingFromParent, !parent.isBeingDismissed,
+                  let scrollView = enclosingScrollView() else {
+                savedOffsetY = nil
+                isRestoring = false
+                return
+            }
+            // Keep the pre-push offset if an interactive pop was cancelled mid-transition.
+            if savedOffsetY == nil {
+                savedOffsetY = scrollView.contentOffset.y
+                savedSafeBottom = scrollView.safeAreaInsets.bottom
+            }
+            isRestoring = false
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            guard savedOffsetY != nil else { return }
+            isRestoring = true
+            let coordinator = parent?.transitionCoordinator ?? transitionCoordinator
+            coordinator?.animate(alongsideTransition: { [weak self] _ in
+                self?.restoreIfReady()
+            }, completion: { [weak self] context in
+                guard let self else { return }
+                if context.isCancelled {
+                    self.isRestoring = false
+                } else {
+                    self.restoreIfReady()
+                    self.savedOffsetY = nil
+                    self.isRestoring = false
+                }
+            })
+        }
+
+        override func viewSafeAreaInsetsDidChange() {
+            super.viewSafeAreaInsetsDidChange()
+            restoreIfReady()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            restoreIfReady()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            restoreIfReady()
+            savedOffsetY = nil
+            isRestoring = false
+        }
+
+        private func restoreIfReady() {
+            guard isRestoring, let targetRawY = savedOffsetY, let scrollView = enclosingScrollView() else { return }
+            if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+                savedOffsetY = nil
+                isRestoring = false
+                return
+            }
+            guard scrollView.safeAreaInsets.bottom + 0.5 >= savedSafeBottom else { return }
+            let inset = scrollView.adjustedContentInset
+            let minOffsetY = -inset.top
+            let maxOffsetY = max(minOffsetY, scrollView.contentSize.height - scrollView.bounds.height + inset.bottom)
+            let targetY = min(max(targetRawY, minOffsetY), maxOffsetY)
+            if abs(scrollView.contentOffset.y - targetY) > 0.5 {
+                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: false)
+            }
+        }
+
+        private func enclosingScrollView() -> UIScrollView? {
+            guard let root = parent?.view else { return nil }
+            return Self.findCollectionOrScrollView(in: root)
+        }
+
+        private static func findCollectionOrScrollView(in view: UIView) -> UIScrollView? {
+            if let collection = view as? UICollectionView {
+                return collection
+            }
+            for subview in view.subviews {
+                if let found = findCollectionOrScrollView(in: subview) {
+                    return found
+                }
+            }
+            return nil
         }
     }
 }

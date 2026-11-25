@@ -35,6 +35,7 @@ Virtual items (All Notes, Unfiled, Recently Deleted) are queries, not stored dat
 - Swipe: pin and unpin (leading edge), delete (trailing edge). In Recently Deleted: restore and delete forever.
 - Context menu (touch and pointer): Pin, Move to a folder (including Unfiled), Tags, Delete.
 - Empty states for no notes, no results, and an empty Recently Deleted.
+- **New notes are drafts.** A note you have just created and not typed into is a draft. Leaving it while it is still empty (opening another note or place, going back on iPhone, or trashing its folder) deletes it outright, and it never goes to Recently Deleted. Once it has any content it is an ordinary note. A draft is created in the place the window is showing, except that New Note from Recently Deleted opens All Notes, because Recently Deleted cannot show a new note. Moving to the place the draft was created in never counts as leaving it (`DraftNote` in `RemarksCore`).
 
 ### Folders
 

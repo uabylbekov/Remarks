@@ -11,6 +11,7 @@ import AppKit
 #endif
 
 /// Integration contracts between Markdown source, display-only styling, and native viewport layout.
+@Suite(.serialized)
 @MainActor
 struct EditorPresentationTests {
     @Test(arguments: ["# Heading", "> quote", "**bold** and `code`", "[link](https://example.com)", "- item", "---", "Title\n=====", "```python\nprint(1)\n```", "~~~swift\nlet x = 1\n~~~", "```\n", "> first\n> "])
@@ -896,6 +897,182 @@ struct EditorPresentationTests {
         #expect(controller.textView.adjustedContentInset.bottom >= 34)
     }
 
+    @Test("Returning from a note in a long list on iPhone keeps the scroll position")
+    func returningFromLastNoteInLongListPreservesScrollOffset() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let library = Library(context: store.mainContext)
+        let folder = try library.createFolder(named: "Work")
+        var notes: [Note] = []
+        let now = Date.now
+        for index in 0..<50 {
+            let date = now.addingTimeInterval(Double(-index) * 86_400 * 0.6)
+            let note = library.createNote(
+                body: "# Note \(index)\nPreview line for note \(index) with some extra text.",
+                in: index.isMultiple(of: 3) ? folder : nil,
+                now: date
+            )
+            notes.append(note)
+        }
+        try store.mainContext.save()
+
+        let host = UIHostingController(rootView: ContentView().modelContainer(store).environment(SyncMonitor()))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive })
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        func findViews<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+            var found: [T] = []
+            if let match = view as? T { found.append(match) }
+            for subview in view.subviews {
+                found.append(contentsOf: findViews(type, in: subview))
+            }
+            return found
+        }
+        func findNavControllers(in vc: UIViewController) -> [UINavigationController] {
+            var found: [UINavigationController] = []
+            if let nav = vc as? UINavigationController { found.append(nav) }
+            for child in vc.children {
+                found.append(contentsOf: findNavControllers(in: child))
+            }
+            return found
+        }
+
+        func settle(_ ms: Int = 350) async throws {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(ms))
+            window.layoutIfNeeded()
+        }
+
+        try await settle(500)
+        // Enter "All Notes" from sidebar.
+        let sidebarCollection = try #require(findViews(UICollectionView.self, in: host.view).first)
+        sidebarCollection.delegate?.collectionView?(sidebarCollection, didSelectItemAt: IndexPath(item: 0, section: 0))
+        for _ in 0..<20 {
+            try await settle(100)
+            if findViews(UICollectionView.self, in: host.view).contains(where: { $0.contentSize.height > 1500 }) {
+                break
+            }
+        }
+
+        let collections = findViews(UICollectionView.self, in: host.view)
+        let listCollection = try #require(collections.max(by: { $0.contentSize.height < $1.contentSize.height }))
+        #expect(listCollection.contentSize.height > 1500)
+
+        // Scroll to the very bottom of the long notes list.
+        let lastSection = listCollection.numberOfSections - 1
+        let lastItem = listCollection.numberOfItems(inSection: lastSection) - 1
+        let lastIndexPath = IndexPath(item: lastItem, section: lastSection)
+        listCollection.scrollToItem(at: lastIndexPath, at: .bottom, animated: false)
+        try await settle(300)
+        let maxOffsetY = max(
+            -listCollection.adjustedContentInset.top,
+            listCollection.contentSize.height - listCollection.bounds.height + listCollection.adjustedContentInset.bottom
+        )
+        listCollection.setContentOffset(CGPoint(x: 0, y: maxOffsetY), animated: false)
+        try await settle(400)
+        let beforeOffsetY = listCollection.contentOffset.y
+
+        // Select the last note, verify push, then pop back.
+        listCollection.selectItem(at: lastIndexPath, animated: false, scrollPosition: [])
+        listCollection.delegate?.collectionView?(listCollection, didSelectItemAt: lastIndexPath)
+        try await settle(600)
+        let nav = try #require(findNavControllers(in: host).first { $0.viewControllers.count >= 3 })
+        #expect(nav.viewControllers.count == 3)
+        nav.popViewController(animated: true)
+        try await settle(700)
+
+        #expect(abs(listCollection.contentOffset.y - beforeOffsetY) < 0.5)
+
+        // Returning from a note in the middle of the list also keeps its scroll offset.
+        let midSection = listCollection.numberOfSections / 2
+        let midPath = IndexPath(item: 0, section: midSection)
+        listCollection.setContentOffset(CGPoint(x: 0, y: 1200), animated: false)
+        try await settle(300)
+        let midBefore = listCollection.contentOffset.y
+        listCollection.selectItem(at: midPath, animated: false, scrollPosition: [])
+        listCollection.delegate?.collectionView?(listCollection, didSelectItemAt: midPath)
+        try await settle(600)
+        nav.popViewController(animated: true)
+        try await settle(700)
+        #expect(abs(listCollection.contentOffset.y - midBefore) < 0.5)
+    }
+
+    @Test("Navigating back from an empty new draft on iPhone deletes it permanently without sending it to Recently Deleted")
+    func emptyNewDraftIsDeletedForeverOnCompactBack() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let library = Library(context: store.mainContext)
+        _ = library.createNote(body: "# Existing Note\nKeep me.")
+        try store.mainContext.save()
+
+        let host = UIHostingController(rootView: ContentView().modelContainer(store).environment(SyncMonitor()))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive })
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        func findViews<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+            var found: [T] = []
+            if let match = view as? T { found.append(match) }
+            for subview in view.subviews {
+                found.append(contentsOf: findViews(type, in: subview))
+            }
+            return found
+        }
+        func findNavControllers(in vc: UIViewController) -> [UINavigationController] {
+            var found: [UINavigationController] = []
+            if let nav = vc as? UINavigationController { found.append(nav) }
+            for child in vc.children {
+                found.append(contentsOf: findNavControllers(in: child))
+            }
+            return found
+        }
+        func settle(_ ms: Int = 350) async throws {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(ms))
+            window.layoutIfNeeded()
+        }
+
+        try await settle(500)
+        // Enter "All Notes" first, then trigger New Note via Sidebar or NoteList.
+        let sidebarCollection = try #require(findViews(UICollectionView.self, in: host.view).first)
+        sidebarCollection.delegate?.collectionView?(sidebarCollection, didSelectItemAt: IndexPath(item: 0, section: 0))
+        try await settle(500)
+
+        // Trigger the New Note UIBarButtonItem from the navigation controller's toolbar.
+        let nav = try #require(findNavControllers(in: host).first { $0.viewControllers.count >= 2 })
+        let newNoteItem = try #require(nav.viewControllers[1].toolbarItems?.last { $0.action != nil })
+        if let target = newNoteItem.target, let action = newNoteItem.action {
+            _ = (target as AnyObject).perform(action, with: newNoteItem)
+        }
+        try await settle(500)
+        #expect(nav.viewControllers.count == 3)
+        let notesWhileDraftOpen = try store.mainContext.fetch(FetchDescriptor<Note>())
+        #expect(notesWhileDraftOpen.count == 2)
+
+        // Type into the draft and clear back to empty, then tap Back (<).
+        let textView = try #require(findViews(UITextView.self, in: host.view).first)
+        textView.insertText("Transient text")
+        try await settle(150)
+        textView.selectedRange = NSRange(location: 0, length: (textView.text as NSString).length)
+        textView.deleteBackward()
+        try await settle(150)
+
+        nav.popViewController(animated: true)
+        try await settle(600)
+
+        let remaining = try store.mainContext.fetch(FetchDescriptor<Note>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.body == "# Existing Note\nKeep me.")
+        #expect(remaining.allSatisfy { $0.deletedAt == nil })
+    }
     #endif
 }
 
@@ -905,7 +1082,7 @@ struct EditorPresentationTests {
 @MainActor
 struct TablePlacementTests {
     private func find<V: NSView>(_ type: V.Type, in view: NSView) -> [V] {
-        (view as? V).map { [$0] } ?? [] + view.subviews.flatMap { find(type, in: $0) }
+        ((view as? V).map { [$0] } ?? []) + view.subviews.flatMap { find(type, in: $0) }
     }
 
     private func editor(showing body: String, height: CGFloat = 700, commands: EditorCommands? = nil)
@@ -1093,6 +1270,73 @@ struct DesktopBehaviorTests {
         ((view as? V).map { [$0] } ?? []) + view.subviews.flatMap { find(type, in: $0) }
     }
 
+    @Test("Clicking empty space below notes on macOS keeps the selected note and row highlight")
+    func clickingEmptySpaceBelowNoteListKeepsSelectionAndHighlight() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let library = Library(context: store.mainContext)
+        let first = library.createNote(body: "# First note\nAlpha")
+        _ = library.createNote(body: "# Second note\nBeta")
+        try store.mainContext.save()
+
+        var selectedRead: UUID? = first.id
+        struct BoundHarness: View {
+            @Binding var selection: UUID?
+            var body: some View {
+                NoteListView(scope: .all, selectedNoteID: $selection)
+                    .frame(width: 320, height: 600)
+            }
+        }
+        let host = NSHostingView(rootView: BoundHarness(selection: Binding(get: { selectedRead }, set: { selectedRead = $0 })).modelContainer(store))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        for _ in 0..<8 {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+        }
+
+        let table = try #require(find(NSTableView.self, in: host).first { $0.effectiveStyle != .sourceList })
+        #expect(table.allowsEmptySelection == false)
+        #expect(table.selectedRowIndexes.count == 1)
+        let initialSelectedRow = table.selectedRow
+
+        // Click well below the last row in empty space.
+        let lastRowRect = table.rect(ofRow: table.numberOfRows - 1)
+        let emptyPointInTable = NSPoint(x: table.bounds.midX, y: lastRowRect.maxY + 60)
+        let emptyPointInWindow = table.convert(emptyPointInTable, to: nil)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: emptyPointInWindow,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: emptyPointInWindow,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 0
+        ))
+        table.mouseDown(with: down)
+        table.mouseUp(with: up)
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(selectedRead == first.id)
+        #expect(table.selectedRow == initialSelectedRow)
+        #expect(table.selectedRowIndexes.count == 1)
+    }
+
     @Test("Clicking an attachment on macOS opens it immediately without selecting it")
     func clickingAttachmentOpensImmediatelyWithoutSelection() async throws {
         let store = try NotesStore.makeContainer(inMemory: true)
@@ -1169,6 +1413,125 @@ struct DesktopBehaviorTests {
         #expect(textView.selectedRange().length == 0)
     }
 
+    @Test("Draft new note on macOS is deleted forever when left empty and kept when navigated away with content")
+    func draftNewNoteLifecycleOnMacOS() async throws {
+        let store = try NotesStore.makeContainer(inMemory: true)
+        let context = store.mainContext
+        let library = Library(context: context)
+        let work = try library.createFolder(named: "Work")
+        let personal = try library.createFolder(named: "Personal")
+        let existing = library.createNote(body: "# Existing\nBody", in: work)
+        try context.save()
+
+        let hostController = NSHostingController(rootView: ContentView().modelContainer(store).environment(SyncMonitor()))
+        let window = NSWindow(contentViewController: hostController)
+        window.setContentSize(NSSize(width: 1000, height: 650))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        let host = hostController.view
+
+        func settle(_ ms: Int = 200) async throws {
+            for _ in 0..<4 {
+                window.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(ms / 4))
+            }
+        }
+
+        try await settle(400)
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let outline = try #require(find(NSOutlineView.self, in: host).first { $0.effectiveStyle == .sourceList })
+        let notesTable = try #require(find(NSTableView.self, in: host).first { $0.effectiveStyle != .sourceList })
+
+        // Select "Work" folder in the sidebar (row 4: section 0 header, All Notes, Unfiled, Folders header, Work, Personal, ...).
+        #expect(outline.numberOfRows >= 6)
+        outline.selectRowIndexes(IndexSet(integer: 4), byExtendingSelection: false)
+        try await settle(300)
+        // Work contains 1 note ("Existing") under 1 date heading -> 2 rows.
+        #expect(notesTable.numberOfRows == 2)
+
+        func triggerNewNote() throws {
+            let toolbarItems = (window.toolbar?.items ?? []).flatMap { item -> [NSToolbarItem] in
+                if let group = item as? NSToolbarItemGroup { return [item] + group.subitems }
+                return [item]
+            }
+            let item = try #require(toolbarItems.first { $0.label == "New Note" || $0.toolTip == "New Note" })
+            let itemView = try #require(item.view)
+            itemView.window?.contentView?.superview?.layoutSubtreeIfNeeded()
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            let mid = NSPoint(x: itemView.bounds.midX, y: itemView.bounds.midY)
+            let pointInWindow = itemView.convert(mid, to: nil)
+            let down = try #require(NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: pointInWindow,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            ))
+            let up = try #require(NSEvent.mouseEvent(
+                with: .leftMouseUp,
+                location: pointInWindow,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 0
+            ))
+            window.sendEvent(down)
+            window.sendEvent(up)
+        }
+        try triggerNewNote()
+        try await settle(300)
+        #expect(try context.fetch(FetchDescriptor<Note>()).count == 2)
+        #expect(notesTable.numberOfRows == 3)
+
+        // 2. Type and clear back to empty, then click the existing note row (row 2) -> empty draft is permanently deleted.
+        let editorTextView = try #require(find(NSTextView.self, in: host).first)
+        editorTextView.insertText("Temporary", replacementRange: editorTextView.selectedRange())
+        try await settle(100)
+        editorTextView.setSelectedRange(NSRange(location: 0, length: (editorTextView.string as NSString).length))
+        editorTextView.deleteBackward(nil)
+        try await settle(100)
+
+        notesTable.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
+        try await settle(300)
+
+        let afterClearing = try context.fetch(FetchDescriptor<Note>())
+        #expect(afterClearing.count == 1)
+        #expect(afterClearing.first?.id == existing.id)
+        #expect(afterClearing.allSatisfy { $0.deletedAt == nil })
+
+        // 3. Create another draft, type content, and switch away -> note is kept.
+        try triggerNewNote()
+        try await settle(300)
+        let editor2 = try #require(find(NSTextView.self, in: host).first)
+        editor2.insertText("Kept draft", replacementRange: editor2.selectedRange())
+        try await settle(150)
+
+        notesTable.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
+        try await settle(300)
+        #expect(try context.fetch(FetchDescriptor<Note>()).filter { $0.deletedAt == nil }.count == 2)
+
+        // 4. Create an empty draft in Work, switch to Personal folder (row 5) -> empty draft in Work is permanently deleted.
+        try triggerNewNote()
+        try await settle(300)
+        #expect(try context.fetch(FetchDescriptor<Note>()).count == 3)
+
+        outline.selectRowIndexes(IndexSet(integer: 5), byExtendingSelection: false)
+        try await settle(300)
+        #expect(notesTable.numberOfRows == 0)
+        let afterFolderSwitch = try context.fetch(FetchDescriptor<Note>())
+        #expect(afterFolderSwitch.count == 2)
+        #expect(afterFolderSwitch.allSatisfy { $0.deletedAt == nil })
+        _ = personal
+    }
 }
 #endif
 
