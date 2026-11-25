@@ -25,8 +25,8 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     static let attachmentHeightKey = NSAttributedString.Key("notes.attachmentHeight")
 
     static let codeInset: CGFloat = 12
-    /// Combined space beside a table's grid for its native leading and trailing carets.
-    static let tableGutter: CGFloat = 16
+    /// Space on the trailing side of a table's grid for its native trailing caret.
+    static let tableGutter: CGFloat = 8
     /// Space inside a code or text-table block above its first row and below its last row.
     static let cardPadding: CGFloat = 4
     /// Space outside a code or text-table block, above and below it. Always the same, whatever the neighboring lines hold,
@@ -734,7 +734,7 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
             }
             guard let fragment else { continue }
             let frame = CGRect(
-                x: padding + Self.tableGutter / 2,
+                x: padding,
                 y: fragment.layoutFragmentFrame.minY + (fragment.textLineFragments.first?.typographicBounds.minY ?? 0),
                 width: TableGridView.width(for: grid.table, in: container.size.width, padding: padding, gutter: Self.tableGutter),
                 height: TableGridView.height(for: grid.table)
@@ -929,7 +929,7 @@ final class LivePreviewController: NSObject, NSTextContentStorageDelegate, NSTex
     func tableBoundary(at point: CGPoint) -> NSRange? {
         guard let storage = contentStorage?.textStorage else { return nil }
         for grid in gridTables() where point.y >= grid.frame.minY && point.y <= grid.frame.maxY {
-            let gutter = Self.tableGutter / 2
+            let gutter = Self.tableGutter
             if point.x >= grid.frame.minX - gutter && point.x < grid.frame.minX {
                 return NSRange(location: tables[grid.index].range.location, length: 0)
             }

@@ -510,6 +510,30 @@ struct EditorPresentationTests {
         #expect(edit.selection.length == 0)
     }
 
+    @Test("Tables align with the leading text margin and expose leading and trailing boundary hits")
+    func tablesAlignWithTheLeadingTextMarginAndExposeBothBoundaryHitZones() throws {
+        let source = "Before\n| A | B |\n| --- | --- |\n| 1 | 2 |\nAfter"
+        let (content, preview) = fixture(source)
+        defer { withExtendedLifetime(preview) {} }
+        let manager = try #require(content.textLayoutManagers.first)
+        manager.ensureLayout(for: content.documentRange)
+        let padding = try #require(manager.textContainer?.lineFragmentPadding)
+        let proseFragment = try #require(manager.textLayoutFragment(for: content.documentRange.location))
+        let proseLineMinX = proseFragment.layoutFragmentFrame.minX + (proseFragment.textLineFragments.first?.typographicBounds.minX ?? padding)
+        let grid = try #require(preview.gridTables(forcingLayout: true).first)
+        #expect(grid.frame.minX == padding)
+        #expect(grid.frame.minX == proseLineMinX)
+
+        let tableStart = (source as NSString).range(of: "| A | B |").location
+        let firstLineEnd = (source as NSString).range(of: "\n", range: NSRange(location: tableStart, length: source.utf16.count - tableStart)).location
+        let midY = grid.frame.midY
+        let leadingHit = preview.tableBoundary(at: CGPoint(x: grid.frame.minX - 4, y: midY))
+        #expect(leadingHit == NSRange(location: tableStart, length: 0))
+
+        let trailingHit = preview.tableBoundary(at: CGPoint(x: grid.frame.maxX + 4, y: midY))
+        #expect(trailingHit == NSRange(location: firstLineEnd, length: 0))
+    }
+
     @Test("Inline code uses the active code font and code theme color without a background box")
     func inlineCodeUsesCodeFontAndCodeThemeColorWithoutBackground() throws {
         let original = AppearanceModel.shared.settings
