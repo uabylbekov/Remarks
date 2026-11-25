@@ -50,6 +50,7 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 4.5 | Type `- [ ]` and Return | A new checkbox line; tapping a box toggles it |
 | 4.6 | Select text and press ⌘B, ⌘I (Mac) | Bold and italic wrap the selection |
 | 4.7 | iPad with a hardware keyboard, language set to German (then Japanese): in a note, hold the ⌘ key | The shortcut list shows Fett, Kursiv, Inline-Code, Link, Codeblock and Listeneinzug verkleinern (and the Japanese names), not English |
+| 4.8 | Mac toolbar and iPhone keyboard bar: put the caret in bold text, then in a bullet list. On the Mac also open the More menu. Repeat in Dark Mode, with Increase Contrast, and with VoiceOver on | Bold and the bullet list buttons are filled with the accent color while the caret is in them (a light pill on the iPhone bar), and the Mac More menu shows a checkmark by an active item. The active ones are easy to tell from the others in Dark Mode with Increase Contrast. VoiceOver reads an active button as selected. Tapping an active button turns that format off |
 
 ## 5. Appearance settings (Spec 11)
 
