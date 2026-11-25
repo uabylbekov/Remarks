@@ -125,6 +125,7 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 10.6 | Settings, drag **Line Spacing** | Open notes re-space at once; typing the first letter on a new empty line does not move the line |
 | 10.7 | Settings, turn **Ligatures** off with Fira Code or JetBrains Mono | `->` and `!=` in code show as separate characters |
 | 10.8 | Install over an older build that has notes (schema migration) | The app opens and the notes are all there |
+| 10.9 | Mac: at the end of a note, type `## Title` and press Return; then in a note ending with an open code block, press Return at the end | The blinking caret is visible on the new line right away, without pressing another key. Repeat with line spacing at 0 and at the default |
 
 ## 11. Accessibility
 

@@ -551,10 +551,27 @@ final class MarkdownNSTextView: NSTextView {
     var onLayout: (() -> Void)?
     /// Called when the text view gains or loses the keyboard.
     var onFocusChange: (() -> Void)?
+    private var isRepairingViewport = false
 
     override func layout() {
         super.layout()
+        repairCollapsedViewportIfNeeded()
         onLayout?()
+    }
+
+    /// Workaround for AppKit. After a native Return, a plain TextKit 2 `NSTextView` leaves `viewportRange` empty until
+    /// the next layout, and on the Mac the insertion indicator can stay hidden after Return at the end of a heading or
+    /// code block. Laying out the viewport again and restarting the indicator brings it back.
+    private func repairCollapsedViewportIfNeeded() {
+        guard !isRepairingViewport,
+              !visibleRect.isEmpty,
+              let layoutManager = textLayoutManager,
+              !layoutManager.documentRange.isEmpty,
+              layoutManager.textViewportLayoutController.viewportRange?.isEmpty == true else { return }
+        isRepairingViewport = true
+        defer { isRepairingViewport = false }
+        layoutManager.textViewportLayoutController.layoutViewport()
+        updateInsertionPointStateAndRestartTimer(true)
     }
 
     override func becomeFirstResponder() -> Bool {
