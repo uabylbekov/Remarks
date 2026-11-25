@@ -56,9 +56,12 @@ struct NoteActionsMenu: View {
                     }
                     Button("New Tag…", systemImage: "plus", action: onNewTag)
                 }
-                Menu("Export as", systemImage: "square.and.arrow.up") {
-                    ForEach(NoteExportFormat.allCases) { format in
-                        Button(format.title, systemImage: format.systemImage) { onExport(format) }
+                // Exporting reads the text, which this version cannot do for a note that needs a newer version.
+                if note.isReadable {
+                    Menu("Export as", systemImage: "square.and.arrow.up") {
+                        ForEach(NoteExportFormat.allCases) { format in
+                            Button(format.title, systemImage: format.systemImage) { onExport(format) }
+                        }
                     }
                 }
                 Divider()

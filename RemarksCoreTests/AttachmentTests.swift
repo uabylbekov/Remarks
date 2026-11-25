@@ -215,39 +215,217 @@ struct AttachmentTests {
         #expect(NoteExporter.export(note).name == "a-b- c-")
     }
 
-    // MARK: Cleanup
-
-    @Test func onlyOldUnreferencedAttachmentsArePurged() throws {
+    @Test("An export with every linked file reports none missing")
+    func completeExportReportsNothingMissing() throws {
         let context = try makeContext()
-        let library = Library(context: context)
-        let store = AttachmentStore(context: context)
-        let now = Date.now
-        let old = now.addingTimeInterval(-AttachmentLimits.unreferencedGracePeriod - 60)
-
-        let note = library.createNote()
-        let kept = try store.add(data: Data([1]), fileName: "kept", typeIdentifier: UTType.data.identifier, to: note, now: old)
-        let orphanOld = try store.add(data: Data([2]), fileName: "old", typeIdentifier: UTType.data.identifier, to: note, now: old)
-        let orphanNew = try store.add(data: Data([3]), fileName: "new", typeIdentifier: UTType.data.identifier, to: note, now: now)
-        note.setBody("Text\n\(AttachmentStore.markdown(for: kept))")
-
-        #expect(try store.purgeUnreferenced(now: now) == 1)
-        try context.save()
-
-        let remaining = Set((note.attachments ?? []).map(\.id))
-        #expect(remaining == [kept.id, orphanNew.id])
-        #expect(!remaining.contains(orphanOld.id))
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1]), fileName: "a.pdf", typeIdentifier: UTType.pdf.identifier, to: note
+        )
+        note.setBody(AttachmentStore.markdown(for: attachment))
+        #expect(NoteExporter.export(note).missingAttachmentCount == 0)
     }
 
-    @Test func maintenanceReportsPurgedAttachments() throws {
+    @Test("A linked file that has not downloaded yet is reported missing and its link is left as it is")
+    func notDownloadedFileIsReportedMissing() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1]), fileName: "a.pdf", typeIdentifier: UTType.pdf.identifier, to: note
+        )
+        note.setBody(AttachmentStore.markdown(for: attachment))
+        // What a synced attachment looks like before its asset arrives.
+        attachment.data = nil
+
+        let exported = NoteExporter.export(note)
+        #expect(exported.missingAttachmentCount == 1)
+        #expect(exported.files.isEmpty)
+        #expect(exported.markdown.contains("attachment://\(attachment.id.uuidString)"))
+    }
+
+    @Test("A link to an attachment this device has no record of is reported missing")
+    func linkWithoutARecordIsReportedMissing() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote(body: "![x](attachment://\(UUID().uuidString))")
+        #expect(NoteExporter.export(note).missingAttachmentCount == 1)
+    }
+
+    @Test("The same missing file linked twice counts once, and an unlinked one does not count")
+    func missingFilesAreCountedPerAttachment() throws {
+        let context = try makeContext()
+        let note = Library(context: context).createNote()
+        let store = AttachmentStore(context: context)
+        let linked = try store.add(data: Data([1]), fileName: "a.pdf", typeIdentifier: UTType.pdf.identifier, to: note)
+        let unlinked = try store.add(data: Data([2]), fileName: "b.pdf", typeIdentifier: UTType.pdf.identifier, to: note)
+        let line = AttachmentStore.markdown(for: linked)
+        note.setBody("\(line)\n\n\(line)")
+        linked.data = nil
+        unlinked.data = nil
+
+        #expect(NoteExporter.export(note).missingAttachmentCount == 1)
+    }
+
+    // MARK: Cleanup
+
+    private let grace = AttachmentLimits.unreferencedGracePeriod
+    private let day: TimeInterval = 24 * 60 * 60
+
+    /// A note with one attachment that its text does not link to, as if the link had just been removed.
+    private func noteWithUnlinkedAttachment(
+        in context: ModelContext, addedAt added: Date
+    ) throws -> (note: Note, attachment: RemarksCore.Attachment) {
+        let note = Library(context: context).createNote()
+        let attachment = try AttachmentStore(context: context).add(
+            data: Data([1]), fileName: "x", typeIdentifier: UTType.data.identifier, to: note, now: added
+        )
+        return (note, attachment)
+    }
+
+    @Test func aLinkedAttachmentIsNeverMarkedOrPurged() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let (note, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: .now.addingTimeInterval(-100 * day))
+        note.setBody("Text\n\(AttachmentStore.markdown(for: attachment))")
+
+        let result = try store.purgeUnreferenced(now: .now)
+        #expect(result.purged == 0)
+        #expect(result.marked == 0)
+        #expect(tracker.dates().isEmpty)
+    }
+
+    @Test func anOldAttachmentWhoseLinkWasJustRemovedStartsItsGracePeriodNow() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let (_, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+
+        let result = try store.purgeUnreferenced(now: now)
+        #expect(result.purged == 0)
+        #expect(result.marked == 1)
+        #expect(tracker.dates()[attachment.id] == now)
+    }
+
+    @Test func anUnlinkedAttachmentIsKeptUntilTheGracePeriodHasPassed() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let (note, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+        try store.purgeUnreferenced(now: now)
+
+        #expect(try store.purgeUnreferenced(now: now.addingTimeInterval(grace - 60)).purged == 0)
+        #expect(note.attachments?.contains { $0.id == attachment.id } == true)
+        #expect(tracker.dates()[attachment.id] == now)
+
+        #expect(try store.purgeUnreferenced(now: now.addingTimeInterval(grace)).purged == 1)
+        try context.save()
+        #expect(note.attachments?.isEmpty != false)
+        #expect(tracker.dates()[attachment.id] == nil)
+    }
+
+    @Test func linkingAnAttachmentAgainRestoresItAndClearsItsGracePeriod() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let (note, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+        try store.purgeUnreferenced(now: now)
+
+        // Undo in the editor puts the link back.
+        note.setBody("Text\n\(AttachmentStore.markdown(for: attachment))")
+        let relinked = try store.purgeUnreferenced(now: now.addingTimeInterval(10 * day))
+        #expect(relinked.purged == 0)
+        #expect(relinked.marked == 1)
+        #expect(tracker.dates()[attachment.id] == nil)
+
+        // Removing it a second time starts a fresh grace period instead of resuming the old one.
+        note.setBody("Text")
+        let later = now.addingTimeInterval(40 * day)
+        #expect(try store.purgeUnreferenced(now: later).purged == 0)
+        #expect(tracker.dates()[attachment.id] == later)
+    }
+
+    @Test func aTrashedNoteKeepsItsAttachmentsAndRestartsTheGracePeriodOnRestore() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let (note, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+        try store.purgeUnreferenced(now: now)
+
+        Library(context: context).trash(note, now: now.addingTimeInterval(day))
+        let whileTrashed = now.addingTimeInterval(grace + 5 * day)
+        #expect(try store.purgeUnreferenced(now: whileTrashed).purged == 0)
+        #expect(tracker.dates()[attachment.id] == nil)
+
+        Library(context: context).restore(note, now: whileTrashed)
+        #expect(try store.purgeUnreferenced(now: whileTrashed).purged == 0)
+        #expect(tracker.dates()[attachment.id] == whileTrashed)
+    }
+
+    /// A newer format may refer to attachments in a way this version cannot see, so it must not call them unlinked.
+    @Test func anAttachmentOfANoteThatNeedsANewerVersionIsNeverMarkedOrPurged() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let (note, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+        note.minimumReaderVersion = NoteFormat.supportedReaderVersion + 1
+
+        let result = try store.purgeUnreferenced(now: now)
+        #expect(result.marked == 0)
+        #expect(tracker.dates()[attachment.id] == nil)
+        #expect(try store.purgeUnreferenced(now: now.addingTimeInterval(grace + day)).purged == 0)
+    }
+
+    @Test func anAttachmentWithNoNoteGetsTheSameGracePeriod() throws {
+        let context = try makeContext()
+        let tracker = InMemoryUnreferencedTracker()
+        let store = AttachmentStore(context: context, tracker: tracker)
+        let now = Date.now
+        let orphan = RemarksCore.Attachment(fileName: "x", typeIdentifier: UTType.data.identifier, data: Data([1]), now: now.addingTimeInterval(-100 * day))
+        context.insert(orphan)
+
+        #expect(try store.purgeUnreferenced(now: now).purged == 0)
+        #expect(tracker.dates()[orphan.id] == now)
+        #expect(try store.purgeUnreferenced(now: now.addingTimeInterval(grace)).purged == 1)
+    }
+
+    @Test func userDefaultsTrackerSurvivesNewStoreInstances() throws {
+        let suiteName = "AttachmentTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let context = try makeContext()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let (_, attachment) = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
+
+        let firstStore = AttachmentStore(context: context, tracker: UserDefaultsUnreferencedTracker(defaults: defaults))
+        #expect(try firstStore.purgeUnreferenced(now: now).marked == 1)
+
+        // Simulates a relaunch with a new AttachmentStore reading the persisted defaults.
+        let relaunchedStore = AttachmentStore(context: context, tracker: UserDefaultsUnreferencedTracker(defaults: defaults))
+        #expect(try relaunchedStore.purgeUnreferenced(now: now.addingTimeInterval(grace - 60)).purged == 0)
+        #expect(try relaunchedStore.purgeUnreferenced(now: now.addingTimeInterval(grace)).purged == 1)
+        #expect(UserDefaultsUnreferencedTracker(defaults: defaults).dates()[attachment.id] == nil)
+    }
+
+    @Test func maintenanceReportsMarkedAndPurgedAttachments() throws {
         let context = try makeContext()
         let library = Library(context: context)
-        let note = library.createNote()
-        let old = Date.now.addingTimeInterval(-AttachmentLimits.unreferencedGracePeriod - 60)
-        try AttachmentStore(context: context).add(data: Data([1]), fileName: "x", typeIdentifier: UTType.data.identifier, to: note, now: old)
+        let now = Date.now
+        _ = try noteWithUnlinkedAttachment(in: context, addedAt: now.addingTimeInterval(-100 * day))
 
-        let report = try library.runMaintenance()
-        #expect(report.purgedAttachments == 1)
-        #expect(report.changedAnything)
+        let first = try library.runMaintenance(now: now)
+        #expect(first.markedAttachments == 1)
+        #expect(first.purgedAttachments == 0)
+        #expect(!first.changedAnything)
+
+        let second = try library.runMaintenance(now: now.addingTimeInterval(grace))
+        #expect(second.purgedAttachments == 1)
+        #expect(second.changedAnything)
     }
 
     @Test func deletingANoteForeverDeletesItsAttachments() throws {

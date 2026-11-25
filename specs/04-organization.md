@@ -35,12 +35,13 @@ Virtual items (All Notes, Unfiled, Recently Deleted) are queries, not stored dat
 - Swipe: pin and unpin (leading edge), delete (trailing edge). In Recently Deleted: restore and delete forever.
 - Context menu (touch and pointer): Pin, Move to a folder (including Unfiled), Tags, Delete.
 - Empty states for no notes, no results, and an empty Recently Deleted.
+- **New notes are drafts.** A note you have just created and not typed into is a draft. Leaving it while it is still empty (opening another note or place, going back on iPhone, or trashing its folder) deletes it outright, and it never goes to Recently Deleted. Once it has any content it is an ordinary note. A draft is created in the place the window is showing, except that New Note from Recently Deleted opens All Notes, because Recently Deleted cannot show a new note. Moving to the place the draft was created in never counts as leaving it (`DraftNote` in `RemarksCore`).
 
 ### Folders
 
 - Create (top level or inside a folder), rename, delete, and move notes into folders.
 - Deleting a folder moves it and its subtree and notes to Recently Deleted together, and restoring undoes exactly that (Spec 01).
-- Reordering and moving folders by drag is a follow-up. For now new folders append after their siblings.
+- Folders can be reordered among their siblings by drag, and moved to another parent (or to the top level) with "Move to". A note can be dragged onto a folder. New folders append after their siblings.
 
 ### Tags
 
@@ -78,7 +79,7 @@ Pure and tested in `NotesCore`: `NoteScope`, `NoteFilter` (scope, search, sortin
 
 ## Known gaps and later work
 
-- Drag to reorder or nest folders, and drag notes onto folders.
+- Drag a folder onto another folder to nest it. (Reordering by drag, "Move to", and dropping notes onto folders are built.)
 - Sort options (created, title) and list density.
 - Smart folders (saved searches), inline hashtags, and search operators such as `tag:` or `in:`.
 - A real full-text index. v1 filters in memory, which is fine for thousands of notes. Spotlight indexing in Spec 06 will add system-level search.

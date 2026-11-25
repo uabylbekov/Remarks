@@ -94,12 +94,18 @@ An **Attachments button** goes on the formatting toolbar (Mac window toolbar and
 
 ## Cleanup (no silent data loss)
 
-- Deleting the Markdown that references an attachment leaves the record in place. A maintenance pass (the same one that purges Recently Deleted) deletes attachments of a live note that are **not referenced in the body** and are older than 30 days. This keeps undo working.
+- Deleting the Markdown that references an attachment leaves the record in place. A maintenance pass (the same one that purges Recently Deleted) handles every attachment that no text links to, whether it belongs to a live note or to no note. This keeps undo working:
+  - The first pass that sees an attachment unlinked records its `id` and the current date in local device state (`UserDefaults`) and keeps the record.
+  - It is deleted by a pass at least **30 days** after that first-seen date. The 30 days count from when the link went missing, not from `createdAt`, so an old attachment is not deleted the moment its link goes — without requiring a schema change on the synced `Attachment` model.
+  - If it is linked again (undo), or its note is in Recently Deleted, the local mark is cleared and the grace period starts over the next time it is found unlinked.
+  - The mark is recorded when maintenance runs, which is after an import and at most once a day, so the grace period can be up to a day longer than 30 days. It is never shorter.
 - Trashing a note keeps its attachments. Permanent deletion removes them (cascade).
 
 ## Export (B3)
 
 Export writes each note as a `.md` file plus an `attachments` folder. References are rewritten to relative paths (`attachments/UUID-name.ext`) in the exported copy only. The stored body is never changed.
+
+A linked attachment can be missing on this device: its record has not synced yet, or its file (a CloudKit asset) has not downloaded. `ExportedNote.missingAttachmentCount` counts these, once per attachment, and ignores attachments the text does not link to. The exported text keeps their `attachment://` links. When the count is not zero, the app asks before it shows the save panel: "Some Attachments Aren't Available", with "Export Without Them" and "Cancel", so a note is never saved with dead links without the person knowing.
 
 ## Search and intents
 

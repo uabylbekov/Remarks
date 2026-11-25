@@ -25,9 +25,17 @@ public struct Library {
     public static var trashRetentionDays: Int { Int(trashRetention / (24 * 60 * 60)) }
 
     public let context: ModelContext
+    private let unreferencedTracker: (any UnreferencedAttachmentTracker)?
 
-    public init(context: ModelContext) {
+    public init(context: ModelContext, unreferencedTracker: (any UnreferencedAttachmentTracker)? = nil) {
         self.context = context
+        if let unreferencedTracker {
+            self.unreferencedTracker = unreferencedTracker
+        } else if context.container.configurations.first?.isStoredInMemoryOnly == true {
+            self.unreferencedTracker = InMemoryUnreferencedTracker()
+        } else {
+            self.unreferencedTracker = nil
+        }
     }
 
     // MARK: Notes
@@ -418,6 +426,8 @@ public struct Library {
         public var purgedNotes = 0
         public var purgedFolders = 0
         public var purgedAttachments = 0
+        /// Attachments whose local grace period for undo was started or cleared.
+        public var markedAttachments = 0
         public var rescuedFolders = 0
 
         public var changedAnything: Bool {
@@ -443,7 +453,9 @@ public struct Library {
         let purged = try purgeExpired(now: now)
         report.purgedNotes = purged.notes
         report.purgedFolders = purged.folders
-        report.purgedAttachments = try AttachmentStore(context: context).purgeUnreferenced(now: now)
+        let attachments = try AttachmentStore(context: context, tracker: unreferencedTracker).purgeUnreferenced(now: now)
+        report.purgedAttachments = attachments.purged
+        report.markedAttachments = attachments.marked
         return report
     }
 

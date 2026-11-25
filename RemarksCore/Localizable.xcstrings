@@ -1826,6 +1826,7 @@
 
     },
     "Remarks couldn't open your notes. Open the app to see why." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -1866,6 +1867,7 @@
       }
     },
     "Remarks couldn't read that file." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -2186,6 +2188,46 @@
         }
       }
     },
+    "That file couldn’t be read." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Diese Datei konnte nicht gelesen werden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Ce fichier n’a pas pu être lu."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "そのファイルを読み込めませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "해당 파일을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "无法读取该文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "無法讀取該檔案。"
+          }
+        }
+      }
+    },
     "That file is larger than 25 MB." : {
       "localizations" : {
         "de" : {
@@ -2302,6 +2344,87 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "該筆記位於「最近刪除」中。請先將其回復。"
+          }
+        }
+      }
+    },
+    "That note needs a newer version of Remarks." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Für diese Notiz wird eine neuere Version von Remarks benötigt."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cette note nécessite une version plus récente de Remarks."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "このメモには、新しいバージョンのRemarksが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "이 노트에는 새로운 버전의 Remarks가 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "这篇笔记需要较新版本的 Remarks。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "這篇筆記需要較新版本的 Remarks。"
+          }
+        }
+      }
+    },
+    "That note needs a newer version of the app." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Für diese Notiz wird eine neuere Version der App benötigt."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Cette note nécessite une version plus récente de l’app."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "そのメモには、新しいバージョンのアプリが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "해당 노트에는 새로운 버전의 앱이 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "该笔记需要较新版本的 App。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "該筆記需要較新版本的 App。"
           }
         }
       }
@@ -2742,6 +2865,46 @@
           "stringUnit" : {
             "state" : "machine_translated",
             "value" : "使用 Apple 智慧撰寫筆記"
+          }
+        }
+      }
+    },
+    "Your notes couldn’t be opened. Open the app to see why." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Deine Notizen konnten nicht geöffnet werden. Öffne die App, um den Grund zu sehen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "Vos notes n’ont pas pu être ouvertes. Ouvrez l’app pour en voir la raison."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "メモを開けませんでした。Appを開いて原因を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "노트를 열 수 없습니다. 앱을 열어 이유를 확인하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "无法打开你的笔记。请打开 App 查看原因。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "machine_translated",
+            "value" : "無法開啟你的筆記。請開啟 App 查看原因。"
           }
         }
       }

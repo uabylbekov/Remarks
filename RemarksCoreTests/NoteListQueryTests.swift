@@ -295,12 +295,10 @@ struct NoteListQueryTests {
         window.contentView = nil
     }
 
-    @Test func recentlyDeletedAppearsOnlyWhileThereAreDeletedNotes() async throws {
+    /// Recently Deleted is always listed, with or without deleted notes, and stays selected when its last note is restored.
+    @Test func recentlyDeletedStaysListedAndSelectedWhenEmpty() async throws {
         let container = try NotesStore.makeContainer(inMemory: true)
         let library = Library(context: container.mainContext)
-        // A deleted empty folder alone must not expose Recently Deleted.
-        let folder = try library.createFolder(named: "Empty folder")
-        library.trash(folder)
         try container.mainContext.save()
 
         var selection: NoteScope? = .all
@@ -322,7 +320,7 @@ struct NoteListQueryTests {
         try container.mainContext.save()
         try await Task.sleep(for: .milliseconds(300))
         host.layoutSubtreeIfNeeded()
-        #expect(table.numberOfRows == initialRows + 2)
+        #expect(table.numberOfRows == initialRows)
 
         selection = .trash
         library.restore(note)
@@ -330,7 +328,7 @@ struct NoteListQueryTests {
         try await Task.sleep(for: .milliseconds(300))
         host.layoutSubtreeIfNeeded()
         #expect(table.numberOfRows == initialRows)
-        #expect(selection == .all)
+        #expect(selection == .trash)
     }
 
     /// A folder with subfolders sits in a disclosure group; choosing it must still select it.
@@ -351,8 +349,8 @@ struct NoteListQueryTests {
         try await Task.sleep(for: .milliseconds(800))
 
         let sidebar = try #require(allTables(in: host).first)
-        // No deleted notes: only the hidden header, All Notes, Unfiled, Folders, and Parent.
-        #expect(sidebar.numberOfRows == 5, "rows: \(sidebar.numberOfRows)")
+        // The hidden header, All Notes, Unfiled, Folders, Parent, a hidden header, and Recently Deleted.
+        #expect(sidebar.numberOfRows == 7, "rows: \(sidebar.numberOfRows)")
         selection = nil
         sidebar.selectRowIndexes(IndexSet(integer: 4), byExtendingSelection: false)
         try await Task.sleep(for: .milliseconds(300))

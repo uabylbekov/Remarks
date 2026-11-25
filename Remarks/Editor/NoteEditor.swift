@@ -151,7 +151,8 @@ private final class MarkdownUITextView: UITextView {
         return PastedFile(data: data, fileName: "Pasted Image.png", type: .png)
     }
 
-    private static let shortcuts: [(title: String, input: String, flags: UIKeyModifierFlags, name: String)] = [
+    // The titles show in the shortcut list that appears when the Command key is held down.
+    private static let shortcuts: [(title: LocalizedStringResource, input: String, flags: UIKeyModifierFlags, name: String)] = [
         ("Bold", "b", .command, "bold"),
         ("Italic", "i", .command, "italic"),
         ("Inline Code", "e", .command, "inlineCode"),
@@ -164,7 +165,7 @@ private final class MarkdownUITextView: UITextView {
         guard isEditable else { return super.keyCommands }
         let own = Self.shortcuts.map { shortcut in
             let command = UIKeyCommand(
-                title: shortcut.title,
+                title: String(localized: shortcut.title),
                 action: #selector(handleShortcut(_:)),
                 input: shortcut.input,
                 modifierFlags: shortcut.flags,
@@ -403,13 +404,7 @@ private struct NoteTextView: UIViewControllerRepresentable {
                 return
             }
             if let id = attachmentID(for: gesture), let attachment = session.catalog.attachment(with: id) {
-                if let point = containerPoint(for: gesture), let range = session.preview?.attachmentSelection(at: point), textView.selectedRange != range {
-                    textView.selectedRange = range
-                    session.preview?.selectionChanged(to: range)
-                    if session.isEditable { _ = textView.becomeFirstResponder() }
-                } else {
-                    session.onOpenAttachment?(attachment)
-                }
+                session.onOpenAttachment?(attachment)
                 return
             }
             guard session.isEditable,
@@ -550,10 +545,27 @@ final class MarkdownNSTextView: NSTextView {
     var onLayout: (() -> Void)?
     /// Called when the text view gains or loses the keyboard.
     var onFocusChange: (() -> Void)?
+    private var isRepairingViewport = false
 
     override func layout() {
         super.layout()
+        repairCollapsedViewportIfNeeded()
         onLayout?()
+    }
+
+    /// Workaround for AppKit. After a native Return, a plain TextKit 2 `NSTextView` leaves `viewportRange` empty until
+    /// the next layout, and on the Mac the insertion indicator can stay hidden after Return at the end of a heading or
+    /// code block. Laying out the viewport again and restarting the indicator brings it back.
+    private func repairCollapsedViewportIfNeeded() {
+        guard !isRepairingViewport,
+              !visibleRect.isEmpty,
+              let layoutManager = textLayoutManager,
+              !layoutManager.documentRange.isEmpty,
+              layoutManager.textViewportLayoutController.viewportRange?.isEmpty == true else { return }
+        isRepairingViewport = true
+        defer { isRepairingViewport = false }
+        layoutManager.textViewportLayoutController.layoutViewport()
+        updateInsertionPointStateAndRestartTimer(true)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -700,7 +712,7 @@ private struct NoteTextView: NSViewRepresentable {
         var openURL: OpenURLAction?
         private weak var textView: MarkdownNSTextView?
         private var tableViews: TableViewRegistry?
-        nonisolated(unsafe) private var scrollObserverTask: Task<Void, Never>?
+        private var scrollObserverTask: Task<Void, Never>?
 
         init(note: Note, commands: EditorCommands?, rendersMarkdown: Bool) {
             session = EditorSession(note: note, commands: commands, rendersMarkdown: rendersMarkdown)
@@ -821,13 +833,7 @@ private struct NoteTextView: NSViewRepresentable {
                 return true
             }
             if let id = session.preview?.attachmentID(at: point), let attachment = session.catalog.attachment(with: id) {
-                if let range = session.preview?.attachmentSelection(at: point), textView.selectedRange() != range {
-                    textView.setSelectedRange(range)
-                    session.preview?.selectionChanged(to: range)
-                    textView.window?.makeFirstResponder(textView)
-                } else {
-                    session.onOpenAttachment?(attachment)
-                }
+                session.onOpenAttachment?(attachment)
                 return true
             }
             guard session.isEditable,

@@ -258,8 +258,10 @@ private struct SliderRow<ValueLabel: View>: View {
                 .monospacedDigit()
         } minimumValueLabel: {
             minimumValueLabel()
+                .accessibilityHidden(true)
         } maximumValueLabel: {
             maximumValueLabel()
+                .accessibilityHidden(true)
         }
         .accessibilityValue(formattedValue)
         #else
@@ -277,10 +279,13 @@ private struct SliderRow<ValueLabel: View>: View {
                 Text(title)
             } minimumValueLabel: {
                 minimumValueLabel()
+                    .accessibilityHidden(true)
             } maximumValueLabel: {
                 maximumValueLabel()
+                    .accessibilityHidden(true)
             }
             .labelsHidden()
+            .accessibilityLabel(title)
             .accessibilityValue(formattedValue)
         }
         #endif
@@ -292,14 +297,23 @@ private struct SliderRow<ValueLabel: View>: View {
 /// The code themes as small samples of their own colors, so a theme is chosen by looking at it.
 private struct ThemeSwatches: View {
     @Binding var selection: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
-        LabeledContent("Theme") {
-            HStack(spacing: 12) {
-                ForEach(CodeTheme.builtIn) { theme in
-                    Button { selection = theme.id } label: { swatch(theme) }
-                        .buttonStyle(.plain)
-                        .contentShape(.rect)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Theme")
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)], alignment: .leading, spacing: 12) {
+                        swatchButtons
+                    }
+                }
+            } else {
+                LabeledContent("Theme") {
+                    HStack(spacing: 12) {
+                        swatchButtons
+                    }
                 }
             }
         }
@@ -307,6 +321,19 @@ private struct ThemeSwatches: View {
             Picker("Theme", selection: $selection) {
                 ForEach(CodeTheme.builtIn) { Text(displayName(for: $0)).tag($0.id) }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var swatchButtons: some View {
+        ForEach(CodeTheme.builtIn) { theme in
+            let isSelected = selection == theme.id
+            Button { selection = theme.id } label: { swatch(theme) }
+                .buttonStyle(.plain)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
+                .accessibilityLabel(displayName(for: theme))
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
     }
 
@@ -321,6 +348,13 @@ private struct ThemeSwatches: View {
 
     private func swatch(_ theme: CodeTheme) -> some View {
         let isSelected = selection == theme.id
+        let isIncreasedContrast = colorSchemeContrast == .increased
+        let borderColor: Color = isSelected
+            ? .accentColor
+            : (isIncreasedContrast ? Color.primary.opacity(0.6) : Color.secondary.opacity(0.3))
+        let borderWidth: CGFloat = isSelected
+            ? (isIncreasedContrast ? 3 : 2.5)
+            : (isIncreasedContrast ? 1.5 : 1)
         return VStack(spacing: 4) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: "Aa")
@@ -338,10 +372,11 @@ private struct ThemeSwatches: View {
             .background(color(theme.background), in: .rect(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isSelected ? 2.5 : 1)
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
             }
             Text(displayName(for: theme))
                 .font(.caption2)
+                .fontWeight(isSelected ? .semibold : .regular)
                 .foregroundStyle(isSelected ? .primary : .secondary)
         }
     }

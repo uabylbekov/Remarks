@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 public enum NotesIntentError: Error, CustomLocalizedStringResourceConvertible {
     case noteNotFound
     case noteInTrash
+    case noteNeedsNewerVersion
     case folderNotFound
     case dataUnavailable
     case attachmentTooLarge
@@ -26,11 +27,29 @@ public enum NotesIntentError: Error, CustomLocalizedStringResourceConvertible {
         case .writerLanguageUnsupported: LocalizedStringResource("Apple Intelligence can’t write in that language yet.", bundle: #bundle)
         case .attachmentTooLarge: LocalizedStringResource("That file is larger than 25 MB.", bundle: #bundle)
         case .tooManyAttachments: LocalizedStringResource("A note can have up to 20 attachments.", bundle: #bundle)
-        case .attachmentUnreadable: LocalizedStringResource("Remarks couldn't read that file.", bundle: #bundle)
-        case .dataUnavailable: LocalizedStringResource("Remarks couldn't open your notes. Open the app to see why.", bundle: #bundle)
+        case .attachmentUnreadable: LocalizedStringResource("That file couldn’t be read.", bundle: #bundle)
+        case .dataUnavailable: LocalizedStringResource("Your notes couldn’t be opened. Open the app to see why.", bundle: #bundle)
         case .noteNotFound: LocalizedStringResource("That note no longer exists.", bundle: #bundle)
         case .noteInTrash: LocalizedStringResource("That note is in Recently Deleted. Restore it first.", bundle: #bundle)
+        case .noteNeedsNewerVersion: LocalizedStringResource("That note needs a newer version of the app.", bundle: #bundle)
         case .folderNotFound: LocalizedStringResource("That folder no longer exists.", bundle: #bundle)
+        }
+    }
+
+    /// The message for what the notes service refused. Switching over every case means a new service error cannot reach
+    /// Siri as a generic failure.
+    init(_ error: NotesServiceError) {
+        switch error {
+        case .noteNotFound: self = .noteNotFound
+        case .noteInTrash: self = .noteInTrash
+        case .noteNeedsNewerVersion: self = .noteNeedsNewerVersion
+        case .folderNotFound: self = .folderNotFound
+        case .attachmentFailed(let reason):
+            switch reason {
+            case .tooLarge: self = .attachmentTooLarge
+            case .tooMany: self = .tooManyAttachments
+            case .unreadable: self = .attachmentUnreadable
+            }
         }
     }
 }
@@ -51,18 +70,8 @@ private func translatingErrors<Result>(_ work: () async throws -> Result) async 
     if NotesAvailability.isUnavailable { throw NotesIntentError.dataUnavailable }
     do {
         return try await work()
-    } catch NotesServiceError.noteNotFound {
-        throw NotesIntentError.noteNotFound
-    } catch NotesServiceError.noteInTrash {
-        throw NotesIntentError.noteInTrash
-    } catch NotesServiceError.folderNotFound {
-        throw NotesIntentError.folderNotFound
-    } catch NotesServiceError.attachmentFailed(let reason) {
-        switch reason {
-        case .tooLarge: throw NotesIntentError.attachmentTooLarge
-        case .tooMany: throw NotesIntentError.tooManyAttachments
-        case .unreadable: throw NotesIntentError.attachmentUnreadable
-        }
+    } catch let error as NotesServiceError {
+        throw NotesIntentError(error)
     }
 }
 

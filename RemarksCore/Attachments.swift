@@ -135,13 +135,75 @@ public enum ImagePreparation {
 
 // MARK: - Store
 
+/// Remembers when unlinked attachments were first noticed so the undo grace period survives relaunches
+/// without modifying the synced database schema.
+public protocol UnreferencedAttachmentTracker {
+    func dates() -> [UUID: Date]
+    func saveDates(_ dates: [UUID: Date])
+}
+
+/// Persists unreferenced attachment timestamps in `UserDefaults`.
+public struct UserDefaultsUnreferencedTracker: UnreferencedAttachmentTracker {
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(defaults: UserDefaults = .standard, key: String = "unreferencedAttachmentDates") {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public func dates() -> [UUID: Date] {
+        guard let raw = defaults.dictionary(forKey: key) as? [String: TimeInterval] else { return [:] }
+        var result: [UUID: Date] = [:]
+        result.reserveCapacity(raw.count)
+        for (idString, interval) in raw {
+            guard let id = UUID(uuidString: idString) else { continue }
+            result[id] = Date(timeIntervalSince1970: interval)
+        }
+        return result
+    }
+
+    public func saveDates(_ dates: [UUID: Date]) {
+        if dates.isEmpty {
+            defaults.removeObject(forKey: key)
+            return
+        }
+        var raw: [String: TimeInterval] = [:]
+        raw.reserveCapacity(dates.count)
+        for (id, date) in dates {
+            raw[id.uuidString] = date.timeIntervalSince1970
+        }
+        defaults.set(raw, forKey: key)
+    }
+}
+
+/// Keeps unreferenced attachment timestamps in memory for isolated tests.
+public final class InMemoryUnreferencedTracker: UnreferencedAttachmentTracker {
+    private var storage: [UUID: Date]
+
+    public init(_ initial: [UUID: Date] = [:]) {
+        self.storage = initial
+    }
+
+    public func dates() -> [UUID: Date] { storage }
+    public func saveDates(_ dates: [UUID: Date]) { storage = dates }
+}
+
 /// Adds attachments to notes and cleans up the ones no text refers to (Spec 07). Like `Library`, it works on any
 /// `ModelContext`.
 public struct AttachmentStore {
     public let context: ModelContext
+    private let tracker: any UnreferencedAttachmentTracker
 
-    public init(context: ModelContext) {
+    public init(context: ModelContext, tracker: (any UnreferencedAttachmentTracker)? = nil) {
         self.context = context
+        if let tracker {
+            self.tracker = tracker
+        } else if context.container.configurations.first?.isStoredInMemoryOnly == true {
+            self.tracker = InMemoryUnreferencedTracker()
+        } else {
+            self.tracker = UserDefaultsUnreferencedTracker()
+        }
     }
 
     /// Creates the attachment record for `data` and links it to `note`. The caller inserts `markdown(for:)` into the note.
@@ -197,28 +259,58 @@ public struct AttachmentStore {
 
     // MARK: Cleanup
 
-    /// Attachments of live notes that no text refers to, plus orphaned attachments with no note, older than the grace period.
-    public func unreferenced(now: Date = .now) throws -> [Attachment] {
-        let cutoff = now.addingTimeInterval(-AttachmentLimits.unreferencedGracePeriod)
-        let notes = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt == nil }))
+    /// Attachments that no text refers to: those of live notes, and orphans with no note. Those of trashed notes are left
+    /// out, because the trash keeps them. So are those of notes that need a newer version of the app: their text may refer
+    /// to attachments in a way this version cannot see.
+    public func unreferenced() throws -> [Attachment] {
+        let supported = NoteFormat.supportedReaderVersion
+        let notes = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate {
+            $0.deletedAt == nil && $0.minimumReaderVersion <= supported
+        }))
         var result: [Attachment] = []
         for note in notes {
             guard let attachments = note.attachments, !attachments.isEmpty else { continue }
             let referenced = AttachmentLine.references(in: note.body)
-            result += attachments.filter { !referenced.contains($0.id) && $0.createdAt <= cutoff }
+            result += attachments.filter { !referenced.contains($0.id) }
         }
-        let orphans = try context.fetch(FetchDescriptor<Attachment>(predicate: #Predicate {
-            $0.note == nil && $0.createdAt <= cutoff
-        }))
-        result += orphans
+        result += try context.fetch(FetchDescriptor<Attachment>(predicate: #Predicate { $0.note == nil }))
         return result
     }
 
+    /// Runs the grace period for attachments that no text refers to, so removing a link can be undone:
+    /// - the first time one is seen unreferenced, it is recorded with `now` and kept;
+    /// - once it has been recorded for the whole grace period, it is deleted;
+    /// - one that is referenced again, or whose note is in the trash, loses its mark, so the period starts over.
+    /// - Returns: how many attachments were deleted, and how many marks were set or cleared.
     @discardableResult
-    public func purgeUnreferenced(now: Date = .now) throws -> Int {
-        let stale = try unreferenced(now: now)
-        stale.forEach(context.delete)
-        return stale.count
+    public func purgeUnreferenced(now: Date = .now) throws -> (purged: Int, marked: Int) {
+        let cutoff = now.addingTimeInterval(-AttachmentLimits.unreferencedGracePeriod)
+        let unlinked = try unreferenced()
+        var tracked = tracker.dates()
+        var purged = 0
+        var marked = 0
+        for attachment in unlinked {
+            guard let since = tracked[attachment.id] else {
+                tracked[attachment.id] = now
+                marked += 1
+                continue
+            }
+            if since <= cutoff {
+                context.delete(attachment)
+                tracked.removeValue(forKey: attachment.id)
+                purged += 1
+            }
+        }
+
+        let unlinkedIDs = Set(unlinked.map(\.id))
+        for id in Array(tracked.keys) where !unlinkedIDs.contains(id) {
+            tracked.removeValue(forKey: id)
+            marked += 1
+        }
+        if marked > 0 || purged > 0 {
+            tracker.saveDates(tracked)
+        }
+        return (purged, marked)
     }
 }
 
@@ -262,6 +354,9 @@ public struct ExportedNote: Sendable {
     /// The body with every `attachment://id` replaced by a relative path such as `attachments/1A2B3C4D-Beach.png`.
     public let markdown: String
     public let files: [ExportedFile]
+    /// How many attachments the text links to that could not be exported, because this device has no record of them or
+    /// has not downloaded their file yet. Their `attachment://` links are left as they are.
+    public let missingAttachmentCount: Int
 }
 
 public enum NoteExporter {
@@ -276,8 +371,10 @@ public enum NoteExporter {
         var markdown = note.body
         let referenced = AttachmentLine.references(in: markdown)
         var files: [ExportedFile] = []
+        var exportedIDs: Set<UUID> = []
         for attachment in note.attachments ?? [] where referenced.contains(attachment.id) {
             guard let data = attachment.data else { continue }
+            exportedIDs.insert(attachment.id)
             let fileName = "\(attachment.id.uuidString.prefix(8))-\(safeName(attachment.fileName.isEmpty ? "Attachment" : attachment.fileName))"
             let path = "attachments/\(fileName)"
             let encoded = path.addingPercentEncoding(withAllowedCharacters: markdownPathAllowed) ?? path
@@ -285,7 +382,12 @@ public enum NoteExporter {
             files.append(ExportedFile(path: path, data: data))
         }
         let title = note.title.isEmpty ? "Note" : note.title
-        return ExportedNote(name: safeName(String(title.prefix(60))), markdown: markdown, files: files)
+        return ExportedNote(
+            name: safeName(String(title.prefix(60))),
+            markdown: markdown,
+            files: files,
+            missingAttachmentCount: referenced.subtracting(exportedIDs).count
+        )
     }
 
     private static func safeName(_ name: String) -> String {

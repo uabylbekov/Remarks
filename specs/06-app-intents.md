@@ -14,7 +14,7 @@ Source of the API rules below: Apple's App Intents guidance for the iOS 26 and 2
 | 4. Create, Add to, Find, Get Note Text | Done |
 | 5. Open Note, Trash Note | Done. Open goes through `NavigationRouter`; Trash confirms first and registers Undo |
 | 6. App Shortcuts and phrases | Done: four shortcuts (Create, Add to, Find, Open). The build extracted all of them |
-| 7. Spotlight indexing and the Settings switch (D1) | Done: `NoteEntity` is an `IndexedEntity` (title, preview, and tags only), `NoteEntityQuery` answers system reindex requests, the app indexes changes a few seconds after each save and removes trashed notes, and Settings has "Show Notes in Spotlight" (on by default; off removes everything). 3 tests. **Not verified in Spotlight on a device** |
+| 7. Spotlight indexing and the Settings switch (D1) | Done: `NoteEntity` is an `IndexedEntity` (title, preview, and tags only), `NoteEntityQuery` answers system reindex requests, the app indexes changes a few seconds after each save on this device and after each finished iCloud import (`SyncState.importCount`, because CloudKit writes imported changes itself, not through a save of the app's context), and removes trashed notes, and Settings has "Show Notes in Spotlight" (on by default; off removes everything). 3 tests. **Not verified in Spotlight on a device** |
 
 **Where the code lives.** The intents and entities are in `NotesCore`, not the app target. The app target is main-actor by default, which conflicts with App Intents and produced about 30 warnings; the framework is not, and this is how Apple's own sample is organized. `NotesCorePackage` and the app's `NotesAppPackage` (an `AppIntentsPackage` pair) tell the system where to find them. Only the `AppShortcutsProvider` stays in the app. A future widget or Siri extension can reuse the same framework.
 
@@ -74,6 +74,7 @@ The note **body** is not a `@Property` of `NoteEntity` (it can be 1 MB). It is r
   - `entities(matching:)` and the property comparators run through the existing `NoteFilter` (case and accent insensitive, all words). The framework does not filter for us, so we call it.
   - Properties offered to Shortcuts "Find Notes where…": title, modified date, pinned, folder, tag.
 - Trashed notes are never returned by default queries.
+- Notes that need a newer version of the app (`Note.isReadable` is false, Spec 01) are never returned, and an intent that names one fails with "That note needs a newer version of the app."
 
 ## Intents (v1)
 
@@ -89,7 +90,7 @@ The note **body** is not a `@Property` of `NoteEntity` (it can be 1 MB). It is r
 Execution rules that apply to all of them:
 - `perform()` is not main-actor isolated. Only Open Note hops to the main actor, for navigation.
 - `perform()` can be run again from the top. Each intent first resolves and validates every parameter, then does the one write **last**. Create Note writes once at the end; Add to Note is not idempotent by nature, so it checks for a value request before writing.
-- Errors conform to `CustomLocalizedStringResourceConvertible`, so Siri speaks a real message ("That note is in Recently Deleted").
+- Errors conform to `CustomLocalizedStringResourceConvertible`, so Siri speaks a real message ("That note is in Recently Deleted"). The messages leave out the app name, because the system already says which app is answering (Apple's Siri guidelines). The app is named "Remarks" in every language, so the home screen, the App Store listing, and the in-app text agree.
 - User-facing strings are literal `LocalizedStringResource` values.
 
 ### App Shortcuts (spoken phrases)

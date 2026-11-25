@@ -9,7 +9,7 @@ The CloudKit production schema is **additive only**: after release you cannot de
 
 ## Goals
 
-1. Store notes, folders, and tags in SwiftData, synced through the CloudKit private database (container `iCloud.io.github.uabylbekov.notes`).
+1. Store notes, folders, and tags in SwiftData, synced through the CloudKit private database (container `iCloud.io.github.uabylbekov.remarks`).
 2. Make the model satisfy every CloudKit restriction from day one.
 3. Keep model logic in a UI-free `NotesCore` package that the app, App Intents, widgets, and a future MCP server share.
 4. Keep Markdown text as the only source of truth for note content.
@@ -106,7 +106,11 @@ Virtual folders **All Notes**, **Unfiled**, and **Recently Deleted** are queries
 2. **Allowed changes after release (additive):** add a new property with a default, add a new entity, add an optional relationship.
 3. **Forbidden after release:** deleting or renaming a property or entity, changing a property's type, making an optional required, reusing an old name for new meaning.
 4. To "remove" something, stop reading it and leave the field in the schema forever.
-5. Gate features that older apps cannot render with `minimumReaderVersion`, so older devices hide the note rather than corrupt it.
+5. Gate features that older apps cannot render with `minimumReaderVersion`, so older devices leave the note alone rather than corrupt it. `NoteFormat.supportedReaderVersion` is the highest value this build understands, and `Note.isReadable` compares against it. A build leaves a note it cannot read untouched:
+   - The app lists it with its title and date and the line "Needs a newer version of Remarks". Opening it shows "Update Required" instead of the editor. Its actions menu leaves out Export. Pin, Move to, Tags, and Delete still work, because they only change fields every version understands.
+   - Siri, Shortcuts, Spotlight, and search through `NotesService` never return it, and changing it fails with a spoken message.
+   - Maintenance never treats its attachments as unreferenced, because its text may refer to them in a way this build cannot see.
+   - Raise `supportedReaderVersion` only together with the code that reads the new format. The check protects only builds that contain it, so it has to ship before the first format that needs version 2.
 6. Before any schema release: initialize the development schema (`initializeCloudKitSchema` in DEBUG builds), inspect it in the CloudKit Console, then promote it to production. This is a manual checklist item in the release spec.
 
 ## Architecture (MV layering)

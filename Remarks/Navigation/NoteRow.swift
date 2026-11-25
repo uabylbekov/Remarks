@@ -8,6 +8,7 @@ struct NoteRow: View {
     let note: Note
     let now: Date
     @Environment(\.calendar) private var calendar
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The search text. Matching words are highlighted in the title and preview.
     let query: String
     /// Shows the folder name, for lists that mix folders (All Notes and search results).
@@ -17,72 +18,129 @@ struct NoteRow: View {
     /// Uses `deletedAt` instead of `modifiedAt` for rows in Recently Deleted.
     var showsDeletedDate = false
 
+    private struct Snapshot: Equatable {
+        let title: String
+        let snippet: String
+        let displayDate: Date
+        let folderName: String?
+        let isPinned: Bool
+        let isReadable: Bool
+    }
+
+    @State private var deletedFallback: Snapshot?
+
+    /// At accessibility text sizes the row's lines wrap instead of being cut off at one line.
+    private var wrapsText: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    private var currentSnapshot: Snapshot? {
+        guard !note.isDeleted, note.modelContext != nil else { return nil }
+        let folderName: String? = if showsFolder, let folder = note.folder, !folder.isDeleted, folder.modelContext != nil {
+            folder.displayName
+        } else {
+            nil
+        }
+        return Snapshot(
+            title: note.title,
+            snippet: note.snippet,
+            displayDate: showsDeletedDate ? (note.deletedAt ?? note.modifiedAt) : note.modifiedAt,
+            folderName: folderName,
+            isPinned: note.isPinned,
+            isReadable: note.isReadable
+        )
+    }
+
     var body: some View {
-        if !note.isDeleted, note.modelContext != nil {
+        let liveSnapshot = currentSnapshot
+        if let snapshot = liveSnapshot ?? deletedFallback {
             let searchWords = NoteSearch.words(in: query)
-            let displayDate = showsDeletedDate ? (note.deletedAt ?? note.modifiedAt) : note.modifiedAt
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        if showsPin && note.isPinned {
+                        if showsPin && snapshot.isPinned {
                             Image(systemName: "pin.fill")
                                 .font(.caption)
                                 .foregroundStyle(.tint)
                                 .accessibilityLabel("Pinned")
                         }
-                        titleView(words: searchWords)
+                        titleView(title: snapshot.title, words: searchWords)
                             .font(.headline)
-                            .lineLimit(1)
+                            .lineLimit(wrapsText ? 2 : 1)
                     }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(Self.dateText(for: displayDate, now: now, calendar: calendar))
+                    // At accessibility text sizes the date and the preview no longer fit side by side, so the date goes
+                    // above the preview, which may then take more lines instead of being cut off.
+                    let dateAndPreview = wrapsText
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                        : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
+                    dateAndPreview {
+                        Text(Self.dateText(for: snapshot.displayDate, now: now, calendar: calendar))
                             .layoutPriority(1)
-                        previewView(words: searchWords)
+                        previewView(snapshot: snapshot, words: searchWords)
                             .foregroundStyle(.secondary)
                     }
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .lineLimit(wrapsText ? 3 : 1)
 
-                    if showsFolder, let folder = note.folder, !folder.isDeleted, folder.modelContext != nil {
+                    if let folderName = snapshot.folderName {
                         Label {
-                            Text(verbatim: folder.displayName)
+                            Text(verbatim: folderName)
                         } icon: {
                             Image(systemName: "folder")
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(wrapsText ? 2 : 1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // A picture at the very start of the note shows at the end of its row, as in Apple Notes.
-                if let imageID = NoteText.leadingImageID(in: note.body) {
+                // A picture at the very start of the note shows at the end of its row, as in Apple Notes. The text of a
+                // note that needs a newer version is not read at all.
+                if liveSnapshot != nil, snapshot.isReadable, let imageID = NoteText.leadingImageID(in: note.body) {
                     NoteThumbnail(note: note, imageID: imageID)
                         .id(imageID)
                 }
             }
             .accessibilityElement(children: .combine)
+            .onAppear {
+                if let liveSnapshot { deletedFallback = liveSnapshot }
+            }
+            .onChange(of: liveSnapshot) { _, newSnapshot in
+                if let newSnapshot { deletedFallback = newSnapshot }
+            }
         }
     }
 
     @ViewBuilder
-    private func titleView(words: [String]) -> some View {
-        if note.title.isEmpty {
+    private func titleView(title: String, words: [String]) -> some View {
+        if title.isEmpty {
             Text("New Note")
         } else if words.isEmpty {
-            Text(verbatim: note.title)
+            Text(verbatim: title)
         } else {
-            Text(Self.highlighted(note.title, words: words, emphasizeWithTint: true))
+            Text(Self.highlighted(title, words: words, emphasizeWithTint: true))
         }
     }
 
     @ViewBuilder
-    private func previewView(words: [String]) -> some View {
-        let text = words.isEmpty
-            ? note.snippet
-            : (NoteSearch.snippet(in: note.body, query: query, skippingTitleLine: true) ?? note.snippet)
+    private func previewView(snapshot: Snapshot, words: [String]) -> some View {
+        if !snapshot.isReadable {
+            // Stronger than the other previews: this says why the note will not open.
+            // `Color.primary`, not the `.primary` style: that one would resolve against the `.secondary` set around it.
+            Text("Needs a newer version of Remarks")
+                .foregroundStyle(Color.primary)
+        } else {
+            readablePreview(snapshot: snapshot, words: words)
+        }
+    }
+
+    @ViewBuilder
+    private func readablePreview(snapshot: Snapshot, words: [String]) -> some View {
+        let text = if !note.isDeleted, note.modelContext != nil, !words.isEmpty {
+            NoteSearch.snippet(in: note.body, query: query, skippingTitleLine: true) ?? snapshot.snippet
+        } else {
+            snapshot.snippet
+        }
         if text.isEmpty {
             Text("No additional text")
         } else if words.isEmpty {

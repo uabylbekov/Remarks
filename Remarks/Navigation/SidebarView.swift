@@ -38,6 +38,7 @@ struct SidebarView: View {
     @Binding var asksNewFolder: Bool
     /// Shows a note that was just created here. The window owns the selection.
     var openNote: (UUID) -> Void = { _ in }
+    var onWillTrashFolder: (Folder) -> Void = { _ in }
 
     @Environment(\.modelContext) private var context
     @Query(filter: #Predicate<Folder> { $0.deletedAt == nil }, sort: \Folder.sortIndex)
@@ -362,6 +363,7 @@ struct SidebarView: View {
 
     private func deleteFolder(withID id: UUID) {
         guard let folder = folder(withID: id) else { return }
+        onWillTrashFolder(folder)
         _ = perform { library.trash(folder) }
         reconcileSelection()
     }

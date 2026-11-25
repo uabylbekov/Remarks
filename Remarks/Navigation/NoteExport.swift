@@ -78,6 +78,9 @@ private struct NoteExportModifier: ViewModifier {
     @State private var document: NoteExportDocument?
     @State private var isPresented = false
     @State private var errorMessage: String?
+    /// An export that is missing attachments waits here until the person has chosen to go on without them.
+    @State private var documentMissingAttachments: NoteExportDocument?
+    @State private var asksAboutMissingAttachments = false
 
     func body(content: Content) -> some View {
         content
@@ -97,6 +100,28 @@ private struct NoteExportModifier: ViewModifier {
                 request = nil
                 document = nil
             }
+            .confirmationDialog(
+                "Some Attachments Aren’t Available",
+                isPresented: $asksAboutMissingAttachments,
+                titleVisibility: .visible
+            ) {
+                Button("Export Without Them") {
+                    document = documentMissingAttachments
+                    documentMissingAttachments = nil
+                    isPresented = true
+                }
+                Button("Cancel", role: .cancel) {
+                    documentMissingAttachments = nil
+                    request = nil
+                }
+            } message: {
+                Text("Some attachments aren’t on this device yet. They may still be downloading from iCloud. You can export the note without them, or wait and try again.")
+            }
+            .onChange(of: asksAboutMissingAttachments) { _, asking in
+                guard !asking, !isPresented else { return }
+                documentMissingAttachments = nil
+                request = nil
+            }
             .alert("Couldn’t Export the Note", item: $errorMessage) { _ in
                 Button("OK", role: .cancel) {}
             } message: { message in
@@ -112,7 +137,14 @@ private struct NoteExportModifier: ViewModifier {
         }
         switch request.format {
         case .markdown:
-            document = NoteExportDocument(exported: NoteExporter.export(note))
+            let exported = NoteExporter.export(note)
+            // A link whose file is missing would be saved as a dead link, so the person decides first.
+            if exported.missingAttachmentCount > 0 {
+                documentMissingAttachments = NoteExportDocument(exported: exported)
+                asksAboutMissingAttachments = true
+                return
+            }
+            document = NoteExportDocument(exported: exported)
         }
         isPresented = true
     }

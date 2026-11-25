@@ -40,6 +40,7 @@ struct TableGridView: View {
     }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @FocusState private var focus: CellID?
     /// The cell that last had focus. Its menu button stays while the menu is open, which takes focus from the field.
     @State private var lastFocus: CellID?
@@ -58,14 +59,31 @@ struct TableGridView: View {
 
     private static var columnWidthCache: [WidthCacheKey: [CGFloat]] = [:]
 
+    private static var minimumTouchRowHeight: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        34
+        #endif
+    }
+
     static var rowHeight: CGFloat {
         let font = EditorTheme.proseFont
-        return max(34, ceil(font.ascender - font.descender + font.leading) + 16)
+        return MarkdownTableMetrics.rowHeight(
+            fontLineHeight: font.ascender - font.descender + font.leading,
+            minimumTouchHeight: minimumTouchRowHeight
+        )
     }
-    private static let cellHorizontalPadding: CGFloat = 10
-    private static let menuWidth: CGFloat = 20
-    private static let minimumColumnWidth: CGFloat = 80
-    private static let maximumColumnWidth: CGFloat = 320
+    private static var cellHorizontalPadding: CGFloat { MarkdownTableMetrics.cellHorizontalPadding }
+    private static var menuIconSize: CGFloat {
+        MarkdownTableMetrics.menuIconSize(forFontSize: EditorTheme.proseFont.pointSize)
+    }
+    private static var menuWidth: CGFloat {
+        MarkdownTableMetrics.menuWidth(forFontSize: EditorTheme.proseFont.pointSize)
+    }
+    private static var minimumColumnWidth: CGFloat {
+        MarkdownTableMetrics.minimumColumnWidth(forFontSize: EditorTheme.proseFont.pointSize)
+    }
 
     /// The room the grid needs: the header and every row.
     static func height(for table: MarkdownTable) -> CGFloat {
@@ -91,7 +109,7 @@ struct TableGridView: View {
                 let display = String(rendered(row[column]).characters)
                 widest = max(widest, (display as NSString).size(withAttributes: [.font: font]).width)
             }
-            return min(maximumColumnWidth, max(minimumColumnWidth, ceil(widest) + 2 * cellHorizontalPadding + menuWidth + 8))
+            return MarkdownTableMetrics.columnWidth(textWidth: widest, fontSize: font.pointSize)
         }
         columnWidthCache[key] = widths
         return widths
@@ -121,9 +139,16 @@ struct TableGridView: View {
         let _ = (appearanceRevision, dynamicTypeSize)
         let widths = Self.columnWidths(for: table)
         let currentRowHeight = Self.rowHeight
+        let isIncreasedContrast = colorSchemeContrast == .increased
         ScrollView(.horizontal) {
-            grid(widths: widths, rowHeight: currentRowHeight)
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
+            grid(widths: widths, rowHeight: currentRowHeight, isIncreasedContrast: isIncreasedContrast)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            isIncreasedContrast ? AnyShapeStyle(Color.primary.opacity(0.55)) : AnyShapeStyle(.separator),
+                            lineWidth: isIncreasedContrast ? 1.5 : 1
+                        )
+                }
                 .clipShape(.rect(cornerRadius: 8))
         }
         .coordinateSpace(name: "markdownTable")
@@ -170,7 +195,7 @@ struct TableGridView: View {
         .font(Font(EditorTheme.proseFont))
     }
 
-    private func grid(widths: [CGFloat], rowHeight: CGFloat) -> some View {
+    private func grid(widths: [CGFloat], rowHeight: CGFloat, isIncreasedContrast: Bool) -> some View {
         Grid(horizontalSpacing: 0, verticalSpacing: 0) {
             GridRow {
                 ForEach(0..<table.columnCount, id: \.self) { column in
@@ -184,7 +209,11 @@ struct TableGridView: View {
                         cellView(row: row, column: column, width: widths[column], height: rowHeight)
                     }
                 }
-                .overlay(alignment: .top) { Divider() }
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(isIncreasedContrast ? AnyShapeStyle(Color.primary.opacity(0.45)) : AnyShapeStyle(.separator))
+                        .frame(height: isIncreasedContrast ? 1.5 : 1)
+                }
             }
         }
     }
@@ -228,6 +257,7 @@ struct TableGridView: View {
             alignment: table.alignments[column],
             width: width,
             height: height,
+            menuIconSize: Self.menuIconSize,
             menuWidth: Self.menuWidth,
             horizontalPadding: Self.cellHorizontalPadding,
             focus: $focus,
@@ -350,6 +380,7 @@ private struct TableCellView<MenuContent: View>: View {
     let alignment: MarkdownTable.Alignment
     let width: CGFloat
     let height: CGFloat
+    let menuIconSize: CGFloat
     let menuWidth: CGFloat
     let horizontalPadding: CGFloat
     var focus: FocusState<TableGridView.CellID?>.Binding
@@ -360,6 +391,7 @@ private struct TableCellView<MenuContent: View>: View {
     let onFocusBounds: (CGRect) -> Void
     @ViewBuilder let menuContent: () -> MenuContent
 
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var cachedSource: String = ""
     @State private var cachedRendered: AttributedString = AttributedString("")
 
@@ -374,6 +406,7 @@ private struct TableCellView<MenuContent: View>: View {
     }
 
     var body: some View {
+        let isIncreasedContrast = colorSchemeContrast == .increased
         ZStack {
             if isEditable {
                 TextField(accessibilityCellLabel, text: $text, prompt: Text(""))
@@ -381,6 +414,7 @@ private struct TableCellView<MenuContent: View>: View {
                     .focused(focus, equals: id)
                     .multilineTextAlignment(TableGridView.textAlignment(alignment))
                     .opacity(isFocused ? 1 : 0)
+                    .accessibilityHidden(!isFocused)
                     .onKeyPress(.upArrow) { onMoveVertical(-1); return .handled }
                     .onKeyPress(.downArrow) { onMoveVertical(1); return .handled }
                     .onKeyPress(keys: [.tab]) { press in onTab(press.modifiers.contains(.shift)); return .handled }
@@ -395,6 +429,7 @@ private struct TableCellView<MenuContent: View>: View {
                     .allowsHitTesting(false)
                     .accessibilityLabel(accessibilityCellLabel)
                     .accessibilityValue(String(displayAttributedText.characters))
+                    .modifier(EditableTableCellAccessibility(isEditable: isEditable, onTap: onTap, menuContent: menuContent))
             }
         }
         .onChange(of: rawText, initial: true) { _, next in
@@ -410,7 +445,9 @@ private struct TableCellView<MenuContent: View>: View {
         .frame(width: width, height: height)
         .overlay(alignment: .trailing) {
             if showsTrailingDivider {
-                Rectangle().fill(.separator).frame(width: 1)
+                Rectangle()
+                    .fill(isIncreasedContrast ? AnyShapeStyle(Color.primary.opacity(0.45)) : AnyShapeStyle(.separator))
+                    .frame(width: isIncreasedContrast ? 1.5 : 1)
             }
         }
         .modifier(FocusedTableCellBounds(isFocused: isFocused, report: onFocusBounds))
@@ -423,7 +460,7 @@ private struct TableCellView<MenuContent: View>: View {
                 } label: {
                     Image(systemName: "chevron.down.circle.fill")
                         .symbolRenderingMode(.hierarchical)
-                        .imageScale(.medium)
+                        .font(.system(size: menuIconSize))
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -440,6 +477,23 @@ private struct TableCellView<MenuContent: View>: View {
             if isEditable {
                 menuContent()
             }
+        }
+    }
+}
+
+private struct EditableTableCellAccessibility<MenuContent: View>: ViewModifier {
+    let isEditable: Bool
+    let onTap: () -> Void
+    @ViewBuilder let menuContent: () -> MenuContent
+
+    func body(content: Content) -> some View {
+        if isEditable {
+            content
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, onTap)
+                .accessibilityActions { menuContent() }
+        } else {
+            content
         }
     }
 }
@@ -465,13 +519,15 @@ private struct FocusedTableCellBounds: ViewModifier {
 }
 
 #Preview("Table") {
-    @Previewable @State var table = MarkdownTable(parsing: """
-    | Item | Qty | Notes |
-    | :-- | --: | --- |
-    | **Apples** | 3 | fresh, `local` |
-    | Milk | 1 | _skim_ |
-    | A very long cell that makes this column wider than the others by a lot | 2 | |
-    """)!
+    @Previewable @State var table = MarkdownTable(
+        header: ["Item", "Qty", "Notes"],
+        alignments: [.left, .right, .none],
+        rows: [
+            ["**Apples**", "3", "fresh, `local`"],
+            ["Milk", "1", "_skim_"],
+            ["A very long cell that makes this column wider than the others by a lot", "2", ""],
+        ]
+    )
     TableGridView(table: table, onChange: { table = $0 }, onDelete: {}, onExit: { _ in })
         .padding()
         .frame(width: 420)

@@ -98,9 +98,13 @@ struct CommandButton: View {
     }
 
     var body: some View {
-        Button(command.title, systemImage: command.systemImage) { perform(command) }
-            .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-            .accessibilityAddTraits(isActive ? .isSelected : [])
+        // A command that can be on or off is a toggle: the system fills the button with the tint, in a toolbar and with a
+        // checkmark in a menu, and reports the selected state to VoiceOver. The editor owns the state, so the setter only
+        // runs the command.
+        Toggle(isOn: Binding(get: { isActive }, set: { _ in perform(command) })) {
+            Label(command.title, systemImage: command.systemImage)
+        }
+        .toggleStyle(.button)
     }
 }
 
@@ -193,15 +197,9 @@ struct KeyboardFormattingBar: View {
                             let active = !formattingDisabled && commands?.activeCommands.contains(command) == true
                             CommandButton(command, isActive: active, perform: perform)
                                 .touchTarget()
-                                .background {
-                                    if active {
-                                        Circle()
-                                            .fill(.tint.opacity(0.16))
-                                            .padding(4)
-                                    }
-                                }
                             if command == .table {
                                 AttachMenu(attach: attach)
+                                    .buttonStyle(.plain)
                                     .touchTarget()
                             }
                         }
@@ -214,17 +212,26 @@ struct KeyboardFormattingBar: View {
                 .disabled(formattingDisabled)
 
                 Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down", action: dismiss)
+                    .buttonStyle(.plain)
                     .touchTarget()
                     .glassEffect(.regular.interactive(), in: .circle)
             }
         }
         .labelStyle(.iconOnly)
-        .buttonStyle(.plain)
+        // The command toggles keep the default button style: the plain one would hide the tint that marks the active ones.
         .menuStyle(.button)
         .font(.title3)
+        // Keep accessory icons within the 44pt bar targets even when AX1–AX5 text sizes are active.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .foregroundStyle(.primary)
         .padding(.horizontal, 8)
         .padding(.bottom, 8)
     }
+}
+
+#Preview("Keyboard bar, Bold and bullet list active") {
+    let commands = EditorCommands()
+    commands.activeCommands = [.bold, .bulletList]
+    return KeyboardFormattingBar(commands: commands, perform: { _ in }, attach: { _ in }, dismiss: {})
 }
 #endif

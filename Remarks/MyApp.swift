@@ -1,12 +1,14 @@
 import SwiftUI
 import SwiftData
 import AppIntents
+import OSLog
 import RemarksCore
 
 @main struct MyApp: App {
     /// One container for the whole app. Built once, with CloudKit sync on (Spec 01 and Spec 02).
     private let store: Result<ModelContainer, Error>
     @State private var monitor = SyncMonitor()
+    @State private var maintenance = LibraryMaintenanceCoordinator()
 
     init() {
         // Before anything is styled: makes the code fonts that ship inside the app usable by name.
@@ -66,7 +68,7 @@ import RemarksCore
             switch store {
             case .success(let container):
                 ContentView()
-                    .modifier(LibraryMaintenance())
+                    .modifier(LibraryMaintenance(container: container, coordinator: maintenance))
                     .modifier(SpotlightSync())
                     .modelContainer(container)
                     .environment(monitor)
@@ -95,45 +97,71 @@ import RemarksCore
 
 /// Keeps the library tidy and starts watching sync (Spec 02, Y3 and Y4):
 /// - after every finished iCloud import, merges duplicate tags and notes that two devices created at once;
-/// - after the first import (or 60 seconds after launch) and then once a day, also permanently deletes notes that have
-///   been in Recently Deleted for 30 days.
-private struct LibraryMaintenance: ViewModifier {
-    @Environment(\.modelContext) private var context
-    @Environment(SyncMonitor.self) private var monitor
+/// - after an import, if none has purged in the last day, also permanently deletes notes that have been in Recently
+///   Deleted for 30 days. Without iCloud (signed out or restricted) no import comes, and the library on this device is
+///   the only copy, so a timer purges instead.
+@MainActor
+private final class LibraryMaintenanceCoordinator {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "io.github.uabylbekov.remarks",
+        category: "maintenance"
+    )
+    private var schedule = PurgeSchedule()
+    private var timerTask: Task<Void, Never>?
 
-    func body(content: Content) -> some View {
-        content.task {
-            // The first purge waits for an import, so a note restored on another device is not deleted from stale
-            // local state. Without iCloud no import comes, so it also runs 60 seconds after launch. Later imports
-            // only merge duplicates, because a purge reads every note and snapshot.
-            var didPurge = false
-            let purgeOnce: @MainActor @Sendable () -> Void = {
-                tidy(purging: !didPurge)
-                didPurge = true
-            }
-            monitor.onImportFinished = purgeOnce
-            monitor.start()
-            tidy(purging: false)
+    func startIfNeeded(container: ModelContainer, monitor: SyncMonitor) {
+        guard timerTask == nil else { return }
+        let purgeIfDue: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let self else { return }
+            let isDue = self.schedule.isDue(at: .now)
+            guard self.tidy(container: container, purging: isDue), isDue else { return }
+            self.schedule.didPurge(at: .now)
+        }
+        monitor.onImportFinished = purgeIfDue
+        monitor.start()
+        tidy(container: container, purging: false)
+        timerTask = Task { [weak monitor] in
             do {
+                // The account is unknown until it has been checked, so an unresolved state waits for the next pass.
                 try await Task.sleep(for: .seconds(60))
-                try Task.checkCancellation()
-                purgeOnce()
-                while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(24 * 60 * 60))
-                    try Task.checkCancellation()
-                    tidy(purging: true)
+                while !Task.isCancelled, let monitor {
+                    if PurgeSchedule.timerMayPurge(account: monitor.state.account) { purgeIfDue() }
+                    try await Task.sleep(for: .seconds(60 * 60))
                 }
             } catch {
-                // Closing a window must not trigger an immediate purge by skipping its delay.
+                // Cancellation must not trigger an immediate purge by skipping its delay.
                 return
             }
         }
     }
 
-    private func tidy(purging: Bool) {
-        let library = Library(context: context)
-        let report = purging ? try? library.runMaintenance() : try? library.dedupe()
-        if report?.changedAnything == true { try? context.save() }
+    /// Runs maintenance in an isolated context so failures never leave partial mutations in the editor's `mainContext`.
+    /// Returns whether the pass finished, so a failed purge is tried again instead of counting as done.
+    @discardableResult
+    private func tidy(container: ModelContainer, purging: Bool) -> Bool {
+        let maintenanceContext = ModelContext(container)
+        let library = Library(context: maintenanceContext)
+        do {
+            let report = purging ? try library.runMaintenance() : try library.dedupe()
+            if report.changedAnything { try maintenanceContext.save() }
+            return true
+        } catch {
+            maintenanceContext.rollback()
+            Self.logger.error("Library maintenance failed (purging: \(purging)): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+}
+
+private struct LibraryMaintenance: ViewModifier {
+    let container: ModelContainer
+    let coordinator: LibraryMaintenanceCoordinator
+    @Environment(SyncMonitor.self) private var monitor
+
+    func body(content: Content) -> some View {
+        content.task {
+            coordinator.startIfNeeded(container: container, monitor: monitor)
+        }
     }
 }
 
@@ -141,6 +169,7 @@ private struct LibraryMaintenance: ViewModifier {
 /// through `NoteEntityQuery`. Turning the setting off removes everything from the index.
 private struct SpotlightSync: ViewModifier {
     @Environment(\.modelContext) private var context
+    @Environment(SyncMonitor.self) private var monitor
     @AppStorage(SpotlightSettings.key) private var isEnabled = true
 
     func body(content: Content) -> some View {
@@ -151,17 +180,47 @@ private struct SpotlightSync: ViewModifier {
             let service = NotesService(modelContainer: context.container)
             let indexed = IndexedNotes()
             await sync(service, indexed)
-            var pending: Task<Void, Never>?
-            for await _ in NotificationCenter.default.notifications(named: ModelContext.didSave) {
-                // Saves come in bursts while typing, so every save restarts the wait.
-                pending?.cancel()
-                pending = Task {
-                    try? await Task.sleep(for: .seconds(3))
-                    guard !Task.isCancelled else { return }
-                    await sync(service, indexed)
+            let debounce = Debounce()
+            let syncSoon: @MainActor @Sendable () -> Void = {
+                debounce.schedule { await sync(service, indexed) }
+            }
+            // The library changes in two ways. A save on this device posts `didSave`. Changes that arrive from iCloud
+            // are written by CloudKit itself, not by a save of this context, so a finished import is its own trigger.
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { @MainActor in
+                    for await _ in NotificationCenter.default.notifications(named: ModelContext.didSave) { syncSoon() }
+                }
+                group.addTask { @MainActor in
+                    var isFirstValue = true
+                    for await _ in Observations({ monitor.state.importCount }) {
+                        // The first value is the count as it is now, not a new import.
+                        if isFirstValue { isFirstValue = false; continue }
+                        syncSoon()
+                    }
                 }
             }
+            await debounce.cancelAndWait()
+        }
+    }
+
+    /// Runs the latest request three seconds after the last one. Saves come in bursts while typing, so every request
+    /// restarts the wait.
+    @MainActor private final class Debounce {
+        private var pending: Task<Void, Never>?
+
+        func schedule(_ work: @escaping @MainActor () async -> Void) {
             pending?.cancel()
+            pending = Task {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                await work()
+            }
+        }
+
+        func cancelAndWait() async {
+            pending?.cancel()
+            await pending?.value
+            pending = nil
         }
     }
 
@@ -172,11 +231,16 @@ private struct SpotlightSync: ViewModifier {
 
     /// Indexes what is new or changed, and removes what was trashed or deleted.
     private func sync(_ service: NotesService, _ indexed: IndexedNotes) async {
+        guard !Task.isCancelled, SpotlightSettings.isEnabled else { return }
         guard let live = try? await service.liveNotes() else { return }
+        guard !Task.isCancelled, SpotlightSettings.isEnabled else { return }
         let changed = live.filter { indexed.byID[$0.id] != $0 }
         let liveIDs = Set(live.map(\.id))
         let gone = indexed.byID.keys.filter { !liveIDs.contains($0) }
-        guard (try? await SpotlightIndexer.index(changed)) != nil, (try? await SpotlightIndexer.remove(gone)) != nil else { return }
+        guard !Task.isCancelled, SpotlightSettings.isEnabled else { return }
+        guard (try? await SpotlightIndexer.index(changed)) != nil,
+              !Task.isCancelled, SpotlightSettings.isEnabled,
+              (try? await SpotlightIndexer.remove(gone)) != nil else { return }
         for note in changed { indexed.byID[note.id] = note }
         for id in gone { indexed.byID[id] = nil }
     }

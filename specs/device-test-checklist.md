@@ -11,6 +11,8 @@ Run the app from Xcode on each device first. Do the iPhone checks on the iPhone 
 | 1.1 | Create a note on the iPhone | It appears on the Mac within about a minute |
 | 1.2 | Edit it on the Mac | The change reaches the iPhone |
 | 1.3 | Turn on Airplane Mode on the iPhone and edit a note, then reconnect | The edit reaches the Mac once the iPhone is back online. (The app shows no sync status of its own; iCloud settings do) |
+| 1.4 | On the Mac, restore a note that has been in Recently Deleted for over 30 days. Keep the iPad offline (Airplane Mode), then launch the app on it and wait several minutes | The note stays on the iPad. Back online, the restore arrives and the note is still there |
+| 1.5 | Sign out of iCloud on a device, trash a note, set its deleted date back over 30 days, relaunch and wait a minute | The note is deleted for good, because this device holds the only copy |
 
 ## 2. Editor conflict fix (Spec 06)
 
@@ -47,6 +49,8 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 4.4 | Look at the keyboard bar | Native formatting and attachment menus, checklist/table buttons, and keyboard dismissal work; the top toolbar also exposes formatting and attachments with the keyboard hidden |
 | 4.5 | Type `- [ ]` and Return | A new checkbox line; tapping a box toggles it |
 | 4.6 | Select text and press ⌘B, ⌘I (Mac) | Bold and italic wrap the selection |
+| 4.7 | iPad with a hardware keyboard, language set to German (then Japanese): in a note, hold the ⌘ key | The shortcut list shows Fett, Kursiv, Inline-Code, Link, Codeblock and Listeneinzug verkleinern (and the Japanese names), not English |
+| 4.8 | Mac toolbar and iPhone keyboard bar: put the caret in bold text, then in a bullet list. On the Mac also open the More menu. Repeat in Dark Mode, with Increase Contrast, and with VoiceOver on | Bold and the bullet list buttons are filled with the accent color while the caret is in them (a light pill on the iPhone bar), and the Mac More menu shows a checkmark by an active item. The active ones are easy to tell from the others in Dark Mode with Increase Contrast. VoiceOver reads an active button as selected. Tapping an active button turns that format off |
 
 ## 5. Appearance settings (Spec 11)
 
@@ -66,6 +70,9 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 6.2 | Create a folder, a tag, and move notes between them | Counts update; Recently Deleted restores |
 | 6.3 | Search "cafe" with a note titled "Café" | It is found; the All Notes / Here switch works |
 | 6.4 | Rotate the iPad (or resize the Mac window) | Columns adapt |
+| 6.5 | Settings, Accessibility, Display & Text Size, Larger Text: turn on Larger Accessibility Sizes and drag to a large size. Open the note list | Each row shows the title, then the date, then the preview below it, and the preview wraps to up to three lines instead of ending in "…". At normal sizes the date and preview are on one line, as before |
+| 6.6 | Mac: select Recently Deleted, then choose File, New Note (⌘N) | A new empty note opens in All Notes and stays. It is not deleted when the window moves to All Notes |
+| 6.7 | Create a new note, type nothing, then open another note (or go back on iPhone). Look in Recently Deleted | The empty note is gone and is not in Recently Deleted. A new note that has text stays |
 
 ## 7. Attachments (Spec 07)
 
@@ -85,6 +92,9 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 7.12 | Mac: copy a file in Finder, paste into a note | It is added as an attachment |
 | 7.13 | Copy text from a web page that has pictures, paste | Only the text is pasted |
 | 7.14 | Note menu, **Export as Markdown…**, pick a place | A folder with the `.md` file and an `attachments` folder; opening the `.md` in another editor shows the pictures |
+| 7.15 | Install this build over the released 1.0.1 build on a device that already has notes with attachments (do not delete the app first), with iCloud on | The app opens, every note and attachment is still there, and a new attachment can be added. The CloudKit Console shows `CD_unreferencedSince` on `CD_Attachment` in the development environment before the schema is deployed to production |
+| 7.16 | A note that needs a newer version of the app (its `minimumReaderVersion` set to 2; the app cannot make one yet, so set it in a debug build) | The list shows its title, date, and "Needs a newer version of Remarks". Opening it shows "Update Required" with no editor. Its menu has no Export. Siri and Spotlight do not find it, and asking Siri to append to it says the note needs a newer version. It is still there after the next maintenance pass, with its attachments |
+| 7.17 | On a Mac that has just been set up with iCloud, open a note with a photo before the photo has downloaded, then export it as Markdown | A dialog says some attachments are not available, with Export Without Them and Cancel. Cancel saves nothing and shows no save panel. After the photo has downloaded, exporting gives no dialog and the folder has the photo |
 
 ## 8. Tables and the formatting toolbar
 
@@ -104,6 +114,7 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 9.2 | Move the note to Recently Deleted and search again | It is gone from Spotlight |
 | 9.3 | Settings, turn off **Show Notes in Spotlight**, search again | Nothing from the app appears; turning it back on brings the notes back |
 | 9.4 | Search for a word that is only in the middle of a note's text | It is not found (only titles, previews, and tags are indexed) |
+| 9.5 | On the Mac, rename a note to "Giraffe plan" while the iPhone has the app open and nothing is edited on the iPhone. Wait for the change to reach the iPhone, then search "Giraffe" in Spotlight on the iPhone | The note is found by its new title within about a minute, without editing anything or relaunching the app on the iPhone |
 
 ## 10. Editor polish, spacing, and settings
 
@@ -117,6 +128,17 @@ This is the riskiest change. It decides what happens when a note changes while i
 | 10.6 | Settings, drag **Line Spacing** | Open notes re-space at once; typing the first letter on a new empty line does not move the line |
 | 10.7 | Settings, turn **Ligatures** off with Fira Code or JetBrains Mono | `->` and `!=` in code show as separate characters |
 | 10.8 | Install over an older build that has notes (schema migration) | The app opens and the notes are all there |
+| 10.9 | Mac: at the end of a note, type `## Title` and press Return; then in a note ending with an open code block, press Return at the end | The blinking caret is visible on the new line right away, without pressing another key. Repeat with line spacing at 0 and at the default |
+
+## 11. Accessibility
+
+| # | Do this | Expect |
+|---|---|---|
+| 11.1 | Turn on VoiceOver (iPhone or Mac) and navigate through a Markdown table in a note | Each cell announces its header/row/column position and text, double-tapping edits it, and the VoiceOver Actions rotor offers Insert/Delete Row/Column and Delete Table |
+| 11.2 | With VoiceOver on, open Appearance Settings | On iPhone, the **Size** and **Line Spacing** sliders announce their titles without reading decorative "A" labels; **Theme** switches cleanly via the accessibility picker |
+| 11.3 | iPhone: enable Larger Accessibility Sizes and set Dynamic Type to the largest size (AX5), then open Appearance Settings and a note with a table, PDF attachment chip, and active keyboard formatting bar | Theme swatches wrap cleanly in an adaptive grid; formatting bar icons stay unclipped inside 44 pt touch targets; table rows and cell menus remain legible; the attachment chip scales its filename and size without truncation |
+| 11.4 | Toggle **Increase Contrast** on and off in System Settings (Mac) or Display & Text Size (iPhone) while a note is open | The open editor updates immediately without relaunch: unchecked checkbox rings thicken with higher contrast, table borders/dividers sharpen, attachment chips gain a clear border, and active keyboard bar buttons show a tint outline |
+| 11.5 | Set a bright accent color (e.g. Yellow or Amber) and check a `- [x]` task item | The checkmark inside the filled circle uses a dark stroke so it stays clearly legible |
 
 ## When something fails
 
