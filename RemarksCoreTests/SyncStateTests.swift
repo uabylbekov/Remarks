@@ -25,6 +25,15 @@ struct SyncStateTests {
         #expect(state(.account(.available)).summary == .upToDate(nil))
     }
 
+    /// The purge deletes for good, so it may only run on a timer when no other copy can exist in iCloud.
+    @Test func onlySignedOutAndRestrictedAccountsAreLocalOnly() {
+        #expect(SyncAccount.noAccount.isLocalOnly)
+        #expect(SyncAccount.restricted.isLocalOnly)
+        #expect(!SyncAccount.available.isLocalOnly)
+        #expect(!SyncAccount.temporarilyUnavailable.isLocalOnly)
+        #expect(!SyncAccount.unknown.isLocalOnly)
+    }
+
     @Test func aSignedOutAccountOutranksEverythingElse() {
         let state = state(.account(.noAccount), .network(isOnline: false), .started(.exporting))
         #expect(state.summary == .signedOut)

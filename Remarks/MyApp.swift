@@ -95,33 +95,33 @@ import RemarksCore
 
 /// Keeps the library tidy and starts watching sync (Spec 02, Y3 and Y4):
 /// - after every finished iCloud import, merges duplicate tags and notes that two devices created at once;
-/// - after the first import (or 60 seconds after launch) and then once a day, also permanently deletes notes that have
-///   been in Recently Deleted for 30 days.
+/// - after an import, if none has purged in the last day, also permanently deletes notes that have been in Recently
+///   Deleted for 30 days. Without iCloud (signed out or restricted) no import comes, and the library on this device is
+///   the only copy, so a timer purges instead.
 private struct LibraryMaintenance: ViewModifier {
     @Environment(\.modelContext) private var context
     @Environment(SyncMonitor.self) private var monitor
 
     func body(content: Content) -> some View {
         content.task {
-            // The first purge waits for an import, so a note restored on another device is not deleted from stale
-            // local state. Without iCloud no import comes, so it also runs 60 seconds after launch. Later imports
-            // only merge duplicates, because a purge reads every note and snapshot.
-            var didPurge = false
-            let purgeOnce: @MainActor @Sendable () -> Void = {
-                tidy(purging: !didPurge)
-                didPurge = true
+            // iCloud is the source of truth: a note restored on another device must not be deleted from stale local
+            // state, so with an iCloud account a purge only follows a successful import, never a timer (the device
+            // may be offline). Imports otherwise only merge duplicates, because a purge reads every note and snapshot.
+            var schedule = PurgeSchedule()
+            let purgeIfDue: @MainActor @Sendable () -> Void = {
+                let isDue = schedule.isDue(at: .now)
+                guard tidy(purging: isDue), isDue else { return }
+                schedule.didPurge(at: .now)
             }
-            monitor.onImportFinished = purgeOnce
+            monitor.onImportFinished = purgeIfDue
             monitor.start()
             tidy(purging: false)
             do {
+                // The account is unknown until it has been checked, so an unresolved state waits for the next pass.
                 try await Task.sleep(for: .seconds(60))
-                try Task.checkCancellation()
-                purgeOnce()
                 while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(24 * 60 * 60))
-                    try Task.checkCancellation()
-                    tidy(purging: true)
+                    if PurgeSchedule.timerMayPurge(account: monitor.state.account) { purgeIfDue() }
+                    try await Task.sleep(for: .seconds(60 * 60))
                 }
             } catch {
                 // Closing a window must not trigger an immediate purge by skipping its delay.
@@ -130,10 +130,17 @@ private struct LibraryMaintenance: ViewModifier {
         }
     }
 
-    private func tidy(purging: Bool) {
+    /// Returns whether the pass finished, so a failed purge is tried again instead of counting as done.
+    @discardableResult
+    private func tidy(purging: Bool) -> Bool {
         let library = Library(context: context)
-        let report = purging ? try? library.runMaintenance() : try? library.dedupe()
-        if report?.changedAnything == true { try? context.save() }
+        do {
+            let report = purging ? try library.runMaintenance() : try library.dedupe()
+            if report.changedAnything { try context.save() }
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

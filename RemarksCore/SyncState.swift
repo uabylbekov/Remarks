@@ -4,6 +4,12 @@ import CloudKit
 /// The iCloud account, as the app needs to understand it.
 public enum SyncAccount: Sendable, Equatable {
     case unknown, available, noAccount, restricted, temporarilyUnavailable
+
+    /// iCloud is not in use, so this device holds the only copy of the library. Anything else may still have
+    /// newer changes in iCloud that have not arrived yet.
+    public var isLocalOnly: Bool {
+        self == .noAccount || self == .restricted
+    }
 }
 
 /// What went wrong, in terms a person can act on.

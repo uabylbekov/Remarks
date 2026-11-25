@@ -11,6 +11,8 @@ Run the app from Xcode on each device first. Do the iPhone checks on the iPhone 
 | 1.1 | Create a note on the iPhone | It appears on the Mac within about a minute |
 | 1.2 | Edit it on the Mac | The change reaches the iPhone |
 | 1.3 | Turn on Airplane Mode on the iPhone and edit a note, then reconnect | The edit reaches the Mac once the iPhone is back online. (The app shows no sync status of its own; iCloud settings do) |
+| 1.4 | On the Mac, restore a note that has been in Recently Deleted for over 30 days. Keep the iPad offline (Airplane Mode), then launch the app on it and wait several minutes | The note stays on the iPad. Back online, the restore arrives and the note is still there |
+| 1.5 | Sign out of iCloud on a device, trash a note, set its deleted date back over 30 days, relaunch and wait a minute | The note is deleted for good, because this device holds the only copy |
 
 ## 2. Editor conflict fix (Spec 06)
 

@@ -53,7 +53,7 @@ Depends on: Spec 01 (data model), `spikes/03-sync-spike.md`.
 | Y5 | Account change or sign-out explanation before data changes | **Not built.** Platform behavior still unverified |
 | Y6 | Settings through `NSUbiquitousKeyValueStore` | Not built (Spec 11) |
 | Y7 | Large note "not synced" warning | Not built |
-| Purge | Items 30 days in Recently Deleted are deleted at launch and daily | Done, tested |
+| Purge | Items 30 days in Recently Deleted are deleted for good, at most once a day. iCloud is the source of truth: with an iCloud account the purge only follows a successful import, never a timer, so an offline device cannot delete from stale state. Signed out or restricted accounts (`SyncAccount.isLocalOnly`) have no other copy, so a timer runs the purge instead. A failed pass is retried | Rule tested. Wiring in `MyApp.swift` needs device testing |
 | Schema | `-InitializeCloudKitSchema` launch argument (DEBUG only) runs `initializeCloudKitSchema` before the container opens | Written and compiles. **Not yet run on a device** |
 
 ## Release checklist: CloudKit schema (do once before the first TestFlight or App Store build)
