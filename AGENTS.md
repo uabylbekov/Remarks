@@ -34,6 +34,7 @@ A task is done only when all of these hold. Say which you verified and which you
 - Prefer Xcode MCP tools (`XcodeRead`, `XcodeGrep`, `XcodeUpdate`, `BuildProject`, `XcodeRefreshCodeIssuesInFile`) over shell commands for project files.
 - Build after non-trivial changes; use `XcodeRefreshCodeIssuesInFile` for fast checks.
 - Search Apple docs (`DocumentationSearch`) before using newer APIs (Liquid Glass, FoundationModels, App Intents, recent SwiftUI). Don't assume older patterns are still right.
+- Never assume. Check in the code, the specs, the docs, or by running it. If something can't be checked (device-only behavior, Apple's undocumented behavior), say so and don't state it as fact. Make whatever can be tested testable (move logic into `RemarksCore`) and run it, rather than listing it as unverified.
 - Commit or push only when asked.
 - Commit messages: no `Co-Authored-By` line, no AI attribution or "Generated with" footer. Same for PR descriptions.
 
